@@ -11,6 +11,8 @@ const TABLE = "convapparel_products";
 const CHAT_MODEL = "assistant_gpt41mini";
 const VECTOR_FIELD = "embedding_vector";
 
+const PLACEHOLDERS = { image: "Describe a look, or drop or paste a photo", chat: "Ask a shopping question" };
+
 const MODES = {
   fulltext: {
     label: "Full-text",
@@ -171,11 +173,13 @@ function signalLabel(hit, mode) {
 function productCard(hit, rank, terms, mode) {
   products.set(hit.id, hit);
   const signal = signalLabel(hit, mode);
+  // Cards sit under the page h1, or under an h3 section title inside the product dialog.
+  const heading = mode === "similar" ? "h4" : "h2";
   return `<article class="card">
     <div class="card-media"><span class="rank">${rank}</span><img src="${escapeHtml(thumbnail(hit.image_url, 320))}" alt="" loading="lazy" decoding="async"></div>
     <div class="card-body">
       <p class="card-category">${escapeHtml(hit.category)}</p>
-      <h3 class="card-title"><button type="button" class="card-open" data-product="${escapeHtml(hit.id)}">${highlight(hit.title, terms)}</button></h3>
+      <${heading} class="card-title"><button type="button" class="card-open" data-product="${escapeHtml(hit.id)}">${highlight(hit.title, terms)}</button></${heading}>
       <p class="card-features">${highlight(hit.features, terms)}</p>
       ${signal ? `<p class="signal">${signal}</p>` : ""}
     </div>
@@ -288,7 +292,7 @@ function compareColumn(result, foundBy) {
     })
     .join("");
   return `<section class="compare-col">
-    <header><h3>${MODES[result.mode].label}</h3><span>${result.took_ms} ms</span></header>
+    <header><h2>${MODES[result.mode].label}</h2><span>${result.took_ms} ms</span></header>
     ${result.corrected ? `<p class="compare-note">${correctedNote(result, "corrected")}</p>` : ""}
     ${items ? `<ol class="compare-list">${items}</ol>` : '<p class="empty">No matches</p>'}
   </section>`;
@@ -412,7 +416,7 @@ function clearPhoto() {
   state.photo = null;
   els.photoPreview.hidden = true;
   els.photoInput.value = "";
-  els.query.placeholder = "Search products";
+  els.query.placeholder = PLACEHOLDERS.image;
 }
 
 async function randomQuestion() {
@@ -440,7 +444,7 @@ function setMode(mode) {
   });
   els.fuzzy.disabled = mode === "vector" || mode === "image";
   els.submit.textContent = mode === "chat" ? "Ask AI" : "Search";
-  els.query.placeholder = mode === "chat" ? "Ask a shopping question" : "Search products";
+  els.query.placeholder = PLACEHOLDERS[mode] || "Search products";
   if (mode === "chat") els.query.removeAttribute("list");
   else els.query.setAttribute("list", "suggestions");
   els.explain.textContent = MODES[mode].explain;
