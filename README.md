@@ -125,7 +125,7 @@ docker compose up -d manticore embed
 docker compose run --rm -v "$PWD:/app" app python scripts/embed_images.py
 ```
 
-It takes about half an hour on a 10-core machine. Progress is saved in `dumps/image_vectors.progress.jsonl`, so a stopped run resumes where it left off. Run `./scripts/init_manticore.sh` afterwards to load the new vectors.
+It takes about 40 minutes on a 10-core machine. Progress is saved in `dumps/image_vectors.progress.jsonl`, so a stopped run resumes where it left off. Run `./scripts/init_manticore.sh` afterwards to load the new vectors.
 
 ## Tests
 
