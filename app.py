@@ -66,10 +66,10 @@ EMBED_UNAVAILABLE = "The image embedding service is not running. Start it with: 
 Category = Literal["tops", "footwear", "outerwear", "bottoms"]
 
 app = FastAPI(title="Manticore Search Playground", version="0.2.0")
-# manticoresearch.com and its local Hugo server call the APIs directly from the browser.
+# manticoresearch.com, its Cloudflare Pages previews and its local Hugo server call the APIs directly from the browser.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https://manticoresearch\.com|http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=r"https://manticoresearch\.com|https://([a-z0-9-]+\.)?site-aqr\.pages\.dev|http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
