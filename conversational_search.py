@@ -223,6 +223,7 @@ def is_uninitialized_error(error_text: str) -> bool:
         needle in text
         for needle in (
             "unknown table",
+            "unknown local table",
             "unknown index",
             "no such table",
             "table not found",

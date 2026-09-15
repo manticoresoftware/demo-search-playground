@@ -229,7 +229,10 @@ async function submit() {
     else if (state.mode === "compare") await runCompare(query, controller.signal);
     else await runSearch(query, controller.signal);
   } catch (error) {
-    if (error.name !== "AbortError") els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (error.name === "AbortError") return;
+    els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    // Results from the previous search would read as answers to this one.
+    if (state.mode !== "chat") els.output.innerHTML = "";
   } finally {
     if (controller === searchController) setBusy(false);
   }
