@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 TABLE_DUMP="${TABLE_DUMP:-dumps/convapparel_products_with_embeddings.sql.xz.part-*}"
+IMAGE_DUMP="${IMAGE_DUMP:-dumps/convapparel_image_vectors.sql.xz.part-*}"
 TABLE_DUMP_MEMBER="${TABLE_DUMP_MEMBER:-}"
 SERVICE_NAME="${MANTICORE_SERVICE:-manticore}"
 TABLE_NAME="${TABLE_NAME:-convapparel_products}"
@@ -56,5 +57,15 @@ patch_schema() {
 
 echo "Restoring $TABLE_DUMP..."
 dump_sql | patch_schema | docker exec -i "$container_id" sh -c 'exec mysql'
+
+shopt -s nullglob
+image_dump_parts=($IMAGE_DUMP)
+shopt -u nullglob
+if (( ${#image_dump_parts[@]} == 0 )); then
+  echo "No $IMAGE_DUMP found, so image search stays off. Create it with scripts/embed_images.py." >&2
+else
+  echo "Restoring $IMAGE_DUMP..."
+  cat "${image_dump_parts[@]}" | xz -cd | docker exec -i "$container_id" sh -c 'exec mysql'
+fi
 
 echo "Manticore initialization complete."

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import lzma
 import re
 import sys
 import urllib.error
@@ -40,7 +41,9 @@ THUMBNAIL_WIDTH = 224
 PLACEHOLDER_MIN_PRODUCTS = 20
 VECTOR_DECIMALS = 4
 PROGRESS = Path("dumps/image_vectors.progress.jsonl")
-OUTPUT = Path("dumps/convapparel_image_vectors.sql")
+OUTPUT = Path("dumps/convapparel_image_vectors.sql.xz")
+# Same part size as the product dump, which keeps every file under GitHub's size limit.
+PART_BYTES = 25 * 1024 * 1024
 
 
 def sql(query: str) -> list[dict]:
@@ -124,12 +127,19 @@ def main() -> None:
     placeholders = {sha1 for sha1, count in counts.items() if count >= PLACEHOLDER_MIN_PRODUCTS}
     rows = (json.loads(line) for line in PROGRESS.open())
     values = (f"({entry['id']},({','.join(map(str, entry['vector']))}))" for entry in rows if entry["sha1"] not in placeholders)
-    with OUTPUT.open("w") as output:
+    with lzma.open(OUTPUT, "wt") as output:
         output.write(f"DROP TABLE IF EXISTS {IMAGE_TABLE};\n{IMAGE_TABLE_SCHEMA};\n")
         while batch := list(islice(values, INSERT_BATCH_SIZE)):
             output.write(f"INSERT INTO {IMAGE_TABLE} (id, image_vector) VALUES {','.join(batch)};\n")
+
+    for old_part in OUTPUT.parent.glob(f"{OUTPUT.name}.part-*"):
+        old_part.unlink()
+    with OUTPUT.open("rb") as whole:
+        for number, chunk in enumerate(iter(lambda: whole.read(PART_BYTES), b"")):
+            Path(f"{OUTPUT}.part-{number:02d}").write_bytes(chunk)
+    OUTPUT.unlink()
     skipped = sum(counts[sha1] for sha1 in placeholders)
-    print(f"Wrote {OUTPUT} with {sum(counts.values()) - skipped} vectors; skipped {skipped} placeholder photos")
+    print(f"Wrote {OUTPUT}.part-* with {sum(counts.values()) - skipped} vectors; skipped {skipped} placeholder photos")
 
 
 if __name__ == "__main__":
