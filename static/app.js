@@ -1,993 +1,480 @@
-const homeScreenEl = document.getElementById("home-screen");
-const resultsScreenEl = document.getElementById("results-screen");
-const homeFormEl = document.getElementById("home-form");
-const homeQueryEl = document.getElementById("home-query");
-const homeCustomPromptEl = document.getElementById("home-custom-prompt");
-const homeRandomQuestionBtn = document.getElementById("home-random-question-btn");
-const homeSearchBtn = document.getElementById("home-search-btn");
-const resultsTopFormEl = document.getElementById("results-top-form");
-const resultsQueryEl = document.getElementById("results-query");
-const resultsCustomPromptEl = document.getElementById("results-custom-prompt");
-const resultsSearchBtn = document.getElementById("results-search-btn");
-const errorBannerEl = document.getElementById("error-banner");
-const sourceResultsEl = document.getElementById("source-results");
-const gridEl = document.getElementById("grid");
-const metaEl = document.getElementById("meta");
-const aiOverviewEl = document.getElementById("ai-overview");
-const aiAnswerEl = document.getElementById("ai-answer");
-const aiHistoryEl = document.getElementById("ai-history");
-const followupFormEl = document.getElementById("followup-form");
-const followupInputEl = document.getElementById("followup-input");
-const followupSendBtn = document.getElementById("followup-send-btn");
-const template = document.getElementById("card-template");
-const productModalEl = document.getElementById("product-modal");
-const productModalBackdropBtn = document.getElementById("product-modal-backdrop");
-const productModalCloseBtn = document.getElementById("product-modal-close-btn");
-const productModalTitleEl = document.getElementById("product-modal-title");
-const productModalImageEl = document.getElementById("product-modal-image");
-const productModalPriceEl = document.getElementById("product-modal-price");
-const productModalRatingEl = document.getElementById("product-modal-rating");
-const productModalDescriptionEl = document.getElementById("product-modal-description");
-const homeExampleCardEl = document.getElementById("home-example-card");
-const resultsExampleCardEl = document.getElementById("results-example-card");
-
-let chatConversationUuid = null;
-let aiConversation = [];
-let exampleBank = [];
-let activeExample = null;
-let activeExampleQuestion = null;
-let currentVisibleSources = [];
-let referencePreviewEl = null;
-let referencePreviewHideTimer = null;
-let activeCustomPrompt = "";
-let isChatRequestInFlight = false;
-const chatModelName = "assistant_gpt41mini";
-
-function showError(message) {
-  errorBannerEl.textContent = message;
-  errorBannerEl.classList.remove("hidden");
-  errorBannerEl.hidden = false;
-}
-
-function clearError() {
-  errorBannerEl.textContent = "";
-  errorBannerEl.classList.add("hidden");
-  errorBannerEl.hidden = true;
-}
-
-function chooseRandom(items) {
-  if (!Array.isArray(items) || items.length === 0) return null;
-  return items[Math.floor(Math.random() * items.length)];
-}
-
-function stableNumber(value, min, max) {
-  const text = String(value || "product");
-  let hash = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-  }
-  return min + (hash % (max - min + 1));
-}
-
-function productPrice(product) {
-  return `$${stableNumber(product?.item_id || product?.document_id || product?.id || product?.title, 24, 189)}.99`;
-}
-
-function productRating(product) {
-  const tenths = stableNumber(product?.item_id || product?.document_id || product?.id || product?.title, 38, 49);
-  const reviews = stableNumber(`${product?.item_id || product?.document_id || product?.title}-reviews`, 84, 2400);
-  return `★ ${(tenths / 10).toFixed(1)} · ${reviews.toLocaleString()} reviews`;
-}
-
-function productImageUrl(product) {
-  return product?.image_url || product?.url || "";
-}
-
-function sameDocumentId(left, right) {
-  const a = String(left || "").trim();
-  const b = String(right || "").trim();
-  return Boolean(a && b && a === b);
-}
-
-function isExactActiveExampleSource(comment) {
-  return sameDocumentId(comment?.item_id || comment?.document_id || comment?.id, activeExample?.document?.document_id);
-}
-
-function isTextActiveExampleSource(comment) {
-  const referenceContent = String(activeExample?.document?.content || "").trim();
-  const sourceContent = String(comment?.description || comment?.text || comment?.content || "").trim();
-  if (referenceContent.length < 80 || sourceContent.length < 80) return false;
-  const referencePrefix = referenceContent.slice(0, 160);
-  const sourcePrefix = sourceContent.slice(0, 160);
-  return referenceContent.includes(sourcePrefix) || sourceContent.includes(referencePrefix);
-}
-
-function findActiveExampleSourceIndex(items) {
-  if (!activeExample?.document || !Array.isArray(items) || items.length === 0) {
-    return -1;
-  }
-
-  const exactIndex = items.findIndex(isExactActiveExampleSource);
-  if (exactIndex >= 0) {
-    return exactIndex;
-  }
-
-  return items.findIndex(isTextActiveExampleSource);
-}
-
-function setResultsVisible(isVisible) {
-  homeScreenEl.classList.toggle("hidden", isVisible);
-  homeScreenEl.hidden = isVisible;
-  resultsScreenEl.classList.toggle("hidden", !isVisible);
-  resultsScreenEl.hidden = !isVisible;
-}
-
-function setAiVisible(isVisible) {
-  aiOverviewEl.classList.toggle("hidden", !isVisible);
-  aiOverviewEl.hidden = !isVisible;
-  if (!isVisible) {
-    setFollowupVisible(false);
-  }
-}
-
-function setFollowupVisible(isVisible) {
-  followupFormEl.classList.toggle("hidden", !isVisible);
-  followupFormEl.hidden = !isVisible;
-}
-
-function sqlQuote(value) {
-  return `'${String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
-}
-
-function currentCustomPrompt() {
-  return String(activeCustomPrompt || "").trim();
-}
-
-function syncCustomPrompt(value, sourceEl = null) {
-  activeCustomPrompt = String(value || "");
-  for (const promptEl of [homeCustomPromptEl, resultsCustomPromptEl]) {
-    if (promptEl && promptEl !== sourceEl && promptEl.value !== activeCustomPrompt) {
-      promptEl.value = activeCustomPrompt;
-    }
-  }
-}
-
-function buildChatSql(message) {
-  const model = currentCustomPrompt() ? `${chatModelName}_<prompt-sha256-prefix>` : chatModelName;
-  return `CALL CHAT(${[
-    sqlQuote(message),
-    sqlQuote("convapparel_products"),
-    sqlQuote(model),
-    sqlQuote(chatConversationUuid || ""),
-    sqlQuote("embedding_vector"),
-  ].join(", ")})`;
-}
-
-function renderAiConversation({ loadingQuestion = "", transientTurn = null } = {}) {
-  aiHistoryEl.innerHTML = "";
-
-  for (const turn of aiConversation) {
-    const article = document.createElement("article");
-    article.className = "ai-turn";
-
-    const question = document.createElement("p");
-    question.className = "ai-question";
-    question.textContent = turn.question;
-    article.appendChild(question);
-
-    const answer = document.createElement("div");
-    answer.className = "ai-answer";
-    answer.innerHTML = answerToHtml(turn.answer || "No AI answer was returned.", turn.sources || []);
-    article.appendChild(answer);
-
-    aiHistoryEl.appendChild(article);
-  }
-
-  if (loadingQuestion) {
-    const article = document.createElement("article");
-    article.className = "ai-turn loading";
-
-    const question = document.createElement("p");
-    question.className = "ai-question";
-    question.textContent = loadingQuestion;
-    article.appendChild(question);
-
-    const answer = document.createElement("div");
-    answer.className = "ai-answer";
-    const sql = buildChatSql(loadingQuestion);
-    answer.innerHTML = `
-      <p>Executing SQL request:</p>
-      <pre class="chat-sql"><code>${escapeHtml(sql)}</code></pre>
-    `;
-    article.appendChild(answer);
-
-    aiHistoryEl.appendChild(article);
-  }
-
-  if (transientTurn) {
-    const article = document.createElement("article");
-    article.className = "ai-turn";
-
-    const question = document.createElement("p");
-    question.className = "ai-question";
-    question.textContent = transientTurn.question;
-    article.appendChild(question);
-
-    const answer = document.createElement("div");
-    answer.className = "ai-answer";
-    answer.innerHTML = answerToHtml(transientTurn.answer || "No AI answer was returned.", transientTurn.sources || []);
-    article.appendChild(answer);
-
-    aiHistoryEl.appendChild(article);
-  }
-}
-
-function clearAiConversation() {
-  aiConversation = [];
-  aiHistoryEl.innerHTML = "";
-  aiAnswerEl.innerHTML = "";
-  aiAnswerEl.classList.add("hidden");
-  aiAnswerEl.hidden = true;
-  setFollowupVisible(false);
-}
-
-function setAiOverview(text, { loading = false, question = "", transient = false, sources = [] } = {}) {
-  aiOverviewEl.classList.toggle("loading", loading);
-  if (loading) {
-    renderAiConversation({ loadingQuestion: question });
-    setFollowupVisible(aiConversation.length > 0);
-    return;
-  }
-
-  const cleanText = String(text || "").trim();
-  if (question) {
-    if (transient) {
-      renderAiConversation({
-        transientTurn: {
-          question,
-          answer: cleanText || "No AI answer was returned.",
-          sources,
-        },
-      });
-      setFollowupVisible(aiConversation.length > 0);
-      return;
-    }
-    aiConversation.push({
-      question,
-      answer: cleanText || "No AI answer was returned.",
-      sources,
-    });
-  }
-  renderAiConversation();
-  setFollowupVisible(aiConversation.length > 0);
-}
-
-async function readErrorMessage(response, fallback) {
-  try {
-    const payload = await response.json();
-    const detail = payload.detail || payload.error || payload.message;
-    if (Array.isArray(detail)) {
-      return `${fallback}: ${detail.map((item) => item.msg || JSON.stringify(item)).join("; ")}`;
-    }
-    if (detail) {
-      return `${fallback}: ${detail}`;
-    }
-  } catch (_) {
-    // Response was not JSON; fall back to status text below.
-  }
-  return `${fallback}: HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-}
-
-function setProductModalOpen(isOpen) {
-  productModalEl.classList.toggle("hidden", !isOpen);
-  productModalEl.hidden = !isOpen;
-}
-
-function setSourcesVisible(isVisible) {
-  sourceResultsEl.classList.toggle("hidden", !isVisible);
-  sourceResultsEl.hidden = !isVisible;
-}
-
-function setBusy(isBusy) {
-  isChatRequestInFlight = isBusy;
-  homeSearchBtn.disabled = isBusy;
-  homeRandomQuestionBtn.disabled = isBusy;
-  resultsQueryEl.disabled = isBusy;
-  if (homeCustomPromptEl) {
-    homeCustomPromptEl.disabled = isBusy;
-  }
-  resultsCustomPromptEl.disabled = isBusy;
-  resultsSearchBtn.disabled = isBusy;
-  followupInputEl.disabled = isBusy;
-  followupSendBtn.disabled = isBusy;
-  homeSearchBtn.textContent = isBusy ? "…" : "↑";
-  resultsSearchBtn.textContent = isBusy ? "…" : "↑";
-  followupSendBtn.textContent = isBusy ? "…" : "↑";
-  document.querySelectorAll(".example-random-btn, .example-use-btn, .example-query-text").forEach((button) => {
-    button.disabled = isBusy;
-  });
-}
-
-function resizeTextarea(textarea, maxHeight = 160) {
-  if (!textarea) return;
-  textarea.style.height = "auto";
-  textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
-}
-
-function resizeQueryTextareas() {
-  resizeTextarea(homeQueryEl, 180);
-  resizeTextarea(resultsQueryEl, 150);
-}
-
-function renderCommentModal(comment) {
-  const body = String(comment.description || comment.text || "").trim();
-  const headline = (comment.title || "").trim() || body.split(/(?<=[.!?])\s+/)[0] || "Product";
-  const imageUrl = productImageUrl(comment);
-  productModalTitleEl.textContent = headline.slice(0, 160);
-  productModalImageEl.src = imageUrl;
-  productModalImageEl.alt = headline;
-  productModalImageEl.hidden = !imageUrl;
-  productModalPriceEl.textContent = productPrice(comment);
-  productModalRatingEl.textContent = `${productRating(comment)} · Product ID: ${comment.item_id || comment.document_id || comment.id || "N/A"}`;
-  productModalDescriptionEl.textContent = body || "No product description available.";
-}
-
-function renderExampleCard(targetEl, { compact = false } = {}) {
-  if (!targetEl) return;
-  const titleText = compact ? "Can search find this product?" : "Can search find this product?";
-  const hintText = compact
-    ? "A real catalog item plus a shopper request that should retrieve it."
-    : "Here is a real catalog item and a natural shopper request that should retrieve it.";
-  if (!activeExample) {
-    targetEl.innerHTML = `
-      <h2>Loading a random ConvApparel product…</h2>
-    `;
-    return;
-  }
-
-  const doc = activeExample.document || {};
-  const questions = Array.isArray(activeExample.questions) ? activeExample.questions : [];
-  const disabledAttr = isChatRequestInFlight ? " disabled" : "";
-  const queryCards = questions
-    .map((question, index) => {
-      const isActive = question === activeExampleQuestion || question.text === activeExampleQuestion?.text;
-      return `<button class="example-query-text${isActive ? " active" : ""}" type="button" data-question-index="${index}"${disabledAttr}>${escapeHtml(question.text)}</button>`;
-    })
-    .join("");
-  const firstQuestionIndex = questions.length ? 0 : -1;
-
-  targetEl.innerHTML = `
-    <div class="example-card-head">
-      <div>
-        <h2>${titleText}</h2>
-        <p class="example-hint">${hintText}</p>
-      </div>
-    </div>
-    <div class="example-search-pair">
-      <article class="example-document">
-        ${doc.image_url ? `<img class="example-product-image" src="${escapeHtml(doc.image_url)}" alt="${escapeHtml(doc.title || "ConvApparel product")}" />` : ""}
-        <div class="example-product-copy">
-          <p class="example-doc-meta">Product ID ${escapeHtml(doc.document_id || "N/A")}${doc.category ? ` · ${escapeHtml(doc.category)}` : ""}</p>
-          <h3>${escapeHtml(doc.title || "ConvApparel product")}</h3>
-          <p>${escapeHtml(doc.content || "")}</p>
-        </div>
-      </article>
-      <section class="example-request-panel" aria-label="Shopper request for this product">
-        <div class="example-query-label">Shopper request</div>
-        <div class="example-questions">
-          ${queryCards}
-        </div>
-        <div class="example-actions">
-          <button class="example-random-btn" type="button" aria-label="Show another product" title="Show another product"${disabledAttr}>🎲</button>
-          <button class="example-use-btn" type="button" data-question-index="${firstQuestionIndex}"${firstQuestionIndex < 0 || isChatRequestInFlight ? " disabled" : ""}>Search with this request</button>
-        </div>
-      </section>
-    </div>
-  `;
-
-  targetEl.querySelector(".example-random-btn")?.addEventListener("click", () => setRandomExample());
-  targetEl.querySelector(".example-use-btn")?.addEventListener("click", (event) => {
-    selectExampleQuestion(Number(event.currentTarget.dataset.questionIndex || 0));
-  });
-  targetEl.querySelectorAll(".example-query-text").forEach((button) => {
-    button.addEventListener("click", () => selectExampleQuestion(Number(button.dataset.questionIndex || 0)));
-  });
-}
-
-function renderExampleCards() {
-  renderExampleCard(homeExampleCardEl);
-  renderExampleCard(resultsExampleCardEl, { compact: true });
-}
-
-function setRandomExample() {
-  if (isChatRequestInFlight) return;
-
-  const examplesWithQuestions = exampleBank.filter((example) => Array.isArray(example.questions) && example.questions.length > 0);
-  activeExample = chooseRandom(examplesWithQuestions) || chooseRandom(exampleBank);
-  const questions = Array.isArray(activeExample?.questions) ? activeExample.questions : [];
-  activeExampleQuestion = chooseRandom(questions) || null;
-  if (activeExampleQuestion?.text) {
-    homeQueryEl.value = activeExampleQuestion.text;
-    resultsQueryEl.value = activeExampleQuestion.text;
-    resizeQueryTextareas();
-  }
-  renderExampleCards();
-  renderComments([]);
-}
-
-function pickRandomExampleQuestion() {
-  const examplesWithQuestions = exampleBank.filter((example) => Array.isArray(example.questions) && example.questions.length > 0);
-  const nextExample = chooseRandom(examplesWithQuestions) || activeExample;
-  const questions = Array.isArray(nextExample?.questions) ? nextExample.questions : [];
-  const nextQuestion = chooseRandom(questions);
-
-  if (!nextExample || !nextQuestion?.text) {
-    return null;
-  }
-
-  activeExample = nextExample;
-  activeExampleQuestion = nextQuestion;
-  homeQueryEl.value = nextQuestion.text;
-  resultsQueryEl.value = nextQuestion.text;
-  resizeQueryTextareas();
-  renderExampleCards();
-  return nextQuestion;
-}
-
-function chooseRandomQuestionForHome() {
-  if (isChatRequestInFlight) return;
-
-  const nextQuestion = pickRandomExampleQuestion();
-  if (!nextQuestion) {
-    setRandomExample();
-    return;
-  }
-  renderComments([]);
-}
-
-async function loadExampleBank() {
-  try {
-    const response = await fetch("/static/example_questions.json?v=20260618ecom");
-    if (!response.ok) {
-      throw new Error(await readErrorMessage(response, "Example loading failed"));
-    }
-    exampleBank = await response.json();
-    chooseRandomQuestionForHome();
-  } catch (error) {
-    console.error("Example loading failed:", error);
-    const message = `<h2>Example questions unavailable</h2><p class="example-hint">${escapeHtml(error.message || String(error))}</p>`;
-    if (homeExampleCardEl) homeExampleCardEl.innerHTML = message;
-    if (resultsExampleCardEl) resultsExampleCardEl.innerHTML = message;
-  }
-}
-
-async function selectExampleQuestion(index) {
-  if (isChatRequestInFlight) return null;
-
-  if (!activeExample) return;
-  activeExampleQuestion = activeExample.questions?.[index] || null;
-  renderExampleCards();
-  if (!activeExampleQuestion) return;
-  await askAi({ message: activeExampleQuestion.text, resetConversation: true });
-}
-
-function normalizeChatSources(sources) {
-  if (!Array.isArray(sources)) return [];
-
-  return sources.map((source, index) => {
-    const content = String(source.content || source.text || source.description || "").trim();
-    const title = String(source.title || "").trim();
-    const distance = source.knn_dist ?? source["@knn_dist"];
-    const sourceId = String(source.id || index + 1).trim();
-    const itemId = String(source.item_id || source.document_id || "").trim();
-    return {
-      id: sourceId,
-      item_id: itemId,
-      document_id: itemId || sourceId || `chat-source-${index + 1}`,
-      title: title || content.split(/(?<=[.!?])\s+/)[0] || "Retrieved product",
-      description: content,
-      text: content,
-      url: source.image_url || source.url || "",
-      image_url: source.image_url || "",
-      features: source.features || "",
-      category: source.category || "",
-      knn_dist: distance,
-    };
-  });
-}
-
-function renderComments(items) {
-  gridEl.innerHTML = "";
-  const visibleItems = Array.isArray(items) ? items : [];
-  currentVisibleSources = visibleItems;
-  setSourcesVisible(visibleItems.length > 0);
-  metaEl.textContent = visibleItems.length
-    ? `${visibleItems.length} source${visibleItems.length === 1 ? "" : "s"}${activeExample?.document ? " · reference product is highlighted if retrieved" : ""}`
-    : "";
-  const referenceSourceIndex = findActiveExampleSourceIndex(visibleItems);
-
-  for (const [index, comment] of visibleItems.entries()) {
-    const node = template.content.cloneNode(true);
-    const preview = String(comment.description || comment.text || "").trim();
-    const headline = (comment.title || "").trim() || preview.split(/(?<=[.!?])\s+/)[0] || "Untitled product";
-    const shortPreview = preview.length > 280 ? `${preview.slice(0, 280)}...` : preview;
-    const commentId = comment.item_id || comment.document_id || comment.id || "N/A";
-    const imageUrl = productImageUrl(comment);
-
-    const isReferenceSource = index === referenceSourceIndex;
-
-    const imageEl = node.querySelector(".product-image");
-    const fallbackEl = node.querySelector(".image-fallback");
-    if (imageUrl) {
-      imageEl.src = imageUrl;
-      imageEl.alt = headline;
-      imageEl.hidden = false;
-      fallbackEl.hidden = true;
-    } else {
-      imageEl.hidden = true;
-      fallbackEl.hidden = false;
-    }
-
-    node.querySelector(".category-pill").textContent = comment.category || "apparel";
-    node.querySelector(".title").textContent = headline.slice(0, 160);
-    node.querySelector(".price").textContent = productPrice(comment);
-    const ratingEl = node.querySelector(".rating");
-    ratingEl.textContent = isReferenceSource ? `Reference product · ${productRating(comment)}` : productRating(comment);
-    ratingEl.hidden = false;
-    node.querySelector(".bought").textContent = `Product ID ${commentId}`;
-    node.querySelector(".color").textContent = comment.category || `Product: ${commentId}`;
-    node.querySelector(".delivery").textContent = comment.features || comment.url || "";
-    node.querySelector(".description").textContent = shortPreview || "No product description";
-
-    const cardEl = node.querySelector(".card");
-    cardEl.classList.add("clickable");
-    cardEl.dataset.sourceIndex = String(index + 1);
-    if (isReferenceSource) {
-      cardEl.classList.add("reference-source-card");
-    }
-    cardEl.addEventListener("click", () => {
-      renderCommentModal(comment);
-      setProductModalOpen(true);
-    });
-
-    gridEl.appendChild(node);
-  }
-}
-
-async function callChat(message) {
-  const customPrompt = currentCustomPrompt();
-  const body = {
-    message,
-    conversation_uuid: chatConversationUuid,
-  };
-  if (customPrompt) {
-    body.custom_prompt = customPrompt;
-  }
-
-  const response = await fetch("/api/assistant/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response, "CALL CHAT failed"));
-  }
-
-  return response.json();
-}
-
-async function askAi({ message = "", resetConversation = false } = {}) {
-  if (isChatRequestInFlight) return null;
-
-  const text = String(message || homeQueryEl.value || followupInputEl.value || "").trim();
-  if (!text) return null;
-
-  if (resetConversation) {
-    chatConversationUuid = null;
-    clearAiConversation();
-  }
-
-  homeQueryEl.value = text;
-  resultsQueryEl.value = text;
-  resizeQueryTextareas();
-  clearError();
-  setResultsVisible(true);
-  setAiVisible(true);
-  setAiOverview("", { loading: true, question: text });
-  renderComments([]);
-  setBusy(true);
-
-  try {
-    const payload = await callChat(text);
-    chatConversationUuid = payload.conversation_uuid || chatConversationUuid;
-    const searchQuery = String(payload.search_query || "").trim();
-    if (searchQuery) {
-      resultsQueryEl.value = searchQuery;
-      resizeTextarea(resultsQueryEl, 150);
-    }
-    const chatItems = Array.isArray(payload.items) ? payload.items : [];
-    const chatSources = normalizeChatSources(payload.sources);
-    const visibleSources = chatItems.length ? chatItems : chatSources;
-    const answer = String(payload.response_with_refs || payload.response || "").trim() || "No AI answer was returned.";
-    setAiOverview(answer, { question: text, sources: visibleSources });
-    renderComments(visibleSources);
-    return payload;
-  } catch (error) {
-    console.error("CALL CHAT failed:", error);
-    showError(error.message || String(error));
-    setAiOverview("CALL CHAT is unavailable for this request.", { question: text, transient: true });
-    renderComments([]);
-    return null;
-  } finally {
-    aiOverviewEl.classList.remove("loading");
-    setBusy(false);
-  }
-}
+const RESULTS_LIMIT = 12;
+const COMPARE_LIMIT = 8;
+const COMPARED_MODES = ["fulltext", "vector", "hybrid"];
+const AUTOCOMPLETE_DELAY_MS = 150;
+const COPIED_MS = 1500;
+// Words under 3 letters would mark half of every title.
+const MIN_HIGHLIGHT_LENGTH = 3;
+const TABLE = "convapparel_products";
+const CHAT_MODEL = "assistant_gpt41mini";
+const VECTOR_FIELD = "embedding_vector";
+
+const MODES = {
+  fulltext: {
+    label: "Full-text",
+    examples: ["lether jaket", "waterprof hiking boots", "linen shirt"],
+    explain:
+      "Ranks products by how well their title, description and features match your words (BM25). With typo tolerance on, OPTION fuzzy=1 also matches words a letter or two away, and CALL QSUGGEST shows the corrected query.",
+  },
+  vector: {
+    label: "Vector",
+    examples: ["outfit for a job interview", "something warm for a winter walk", "clothes for a hot day at the beach"],
+    explain:
+      "Manticore turns your query into an embedding with the all-MiniLM-L12-v2 model and finds the nearest product embeddings in an HNSW index. Products can match without sharing a single word.",
+  },
+  hybrid: {
+    label: "Hybrid",
+    examples: ["comfy shoes for standing all day", "warm waterprof jacket", "summer dress for a beach wedding"],
+    explain:
+      "Runs the full-text and vector searches in parallel and merges both rankings with Reciprocal Rank Fusion (OPTION fusion_method='rrf'). Each product shows which search found it.",
+  },
+  compare: {
+    label: "Compare",
+    examples: ["comfy shoes for standing all day", "lether jaket", "outfit for a job interview"],
+    explain:
+      "Sends the same query to full-text, vector and hybrid search. Products found by more than one of them are marked, and pointing at a product highlights it in every list.",
+  },
+  chat: {
+    label: "Ask AI",
+    examples: ["Comfortable sneakers I can walk in all day", "A warm jacket for rainy autumn days", "What should I wear to a summer wedding?"],
+    explain:
+      "CALL CHAT rewrites your question into a search query, retrieves matching products with vector search, and an LLM writes the answer from those products only. Numbers in the answer open the products they come from.",
+  },
+};
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  tabs: Array.from(document.querySelectorAll('.modes [role="tab"]')),
+  form: $("search-form"),
+  query: $("query"),
+  submit: $("submit"),
+  suggestions: $("suggestions"),
+  fuzzy: $("fuzzy"),
+  categories: $("categories"),
+  examples: $("examples"),
+  results: $("results"),
+  status: $("status"),
+  output: $("output"),
+  sql: $("sql"),
+  request: $("request"),
+  explain: $("explain"),
+  dialog: $("product"),
+  productImage: $("product-image"),
+  productCategory: $("product-category"),
+  productTitle: $("product-title"),
+  productDescription: $("product-description"),
+  productFeatures: $("product-features"),
+  similar: $("similar"),
+  similarSql: $("similar-sql"),
+};
+
+const params = new URLSearchParams(location.search);
+const state = {
+  mode: MODES[params.get("mode")] ? params.get("mode") : "hybrid",
+  category: params.get("category") || "",
+  fuzzy: params.get("fuzzy") !== "0",
+  conversation: null,
+  turns: [],
+};
+const products = new Map();
+let countedQuery = null;
+let questionBank = null;
+let searchController = null;
+let suggestController = null;
+let similarController = null;
+let suggestTimer = null;
 
 function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
 
-function renderInlineMarkdown(value) {
-  return value
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^\*])\*([^*]+)\*/g, "$1<em>$2</em>")
-    .replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
+// Mirrors sql_quote() in app.py, so the CALL CHAT shown matches what the server sends.
+function sqlString(value) {
+  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 
-function markdownToHtml(markdown) {
-  const input = String(markdown || "").replace(/\r\n/g, "\n").trim();
-  if (!input) return "";
+function shellQuote(value) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
 
-  const codeBlocks = [];
-  const withPlaceholders = input.replace(/```([\w-]+)?\n?([\s\S]*?)```/g, (_, lang, body) => {
-    const languageClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-    const html = `<pre><code${languageClass}>${escapeHtml(body)}</code></pre>`;
-    const token = `@@CODE_BLOCK_${codeBlocks.length}@@`;
-    codeBlocks.push(html);
-    return token;
-  });
+// Amazon serves any width from the same URL; the originals are up to 1500px wide.
+function thumbnail(url, width) {
+  return url.replace(/\._AC_[A-Z0-9_]+_\./, `._AC_UL${width}_.`);
+}
 
-  const lines = withPlaceholders.split("\n");
-  const html = [];
-  let inUl = false;
-  let inOl = false;
+function highlight(text, terms) {
+  const words = terms.filter((term) => term.length >= MIN_HIGHLIGHT_LENGTH);
+  const safe = escapeHtml(text);
+  return words.length ? safe.replace(new RegExp(`\\b((?:${words.join("|")})\\w*)`, "gi"), "<mark>$1</mark>") : safe;
+}
 
-  const closeLists = () => {
-    if (inUl) {
-      html.push("</ul>");
-      inUl = false;
-    }
-    if (inOl) {
-      html.push("</ol>");
-      inOl = false;
-    }
-  };
+function highlightSql(sql) {
+  return sql
+    .split(/('(?:\\.|[^'\\])*')/)
+    .map((part, index) =>
+      index % 2
+        ? `<span class="sql-str">${escapeHtml(part)}</span>`
+        : escapeHtml(part)
+            .replace(/\s+(FROM|WHERE|LIMIT|OPTION|FACET)\b/g, "\n$1")
+            .replace(/\s+AND\b/g, "\n  AND")
+            .replace(/\b(SELECT|FROM|WHERE|AND|LIMIT|OPTION|FACET|ORDER BY|DESC|AS|CALL)\b/g, '<span class="sql-kw">$1</span>'),
+    )
+    .join("");
+}
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      closeLists();
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      closeLists();
-      const level = heading[1].length;
-      html.push(`<h${level}>${renderInlineMarkdown(escapeHtml(heading[2]))}</h${level}>`);
-      continue;
-    }
-
-    const ulItem = line.match(/^[-*+]\s+(.+)$/);
-    if (ulItem) {
-      if (inOl) {
-        html.push("</ol>");
-        inOl = false;
-      }
-      if (!inUl) {
-        html.push("<ul>");
-        inUl = true;
-      }
-      html.push(`<li>${renderInlineMarkdown(escapeHtml(ulItem[1]))}</li>`);
-      continue;
-    }
-
-    const olItem = line.match(/^\d+\.\s+(.+)$/);
-    if (olItem) {
-      if (inUl) {
-        html.push("</ul>");
-        inUl = false;
-      }
-      if (!inOl) {
-        html.push("<ol>");
-        inOl = true;
-      }
-      html.push(`<li>${renderInlineMarkdown(escapeHtml(olItem[1]))}</li>`);
-      continue;
-    }
-
-    closeLists();
-    html.push(`<p>${renderInlineMarkdown(escapeHtml(line))}</p>`);
+async function api(path, options = {}, signal = undefined) {
+  const response = await fetch(path, { ...options, signal });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = Array.isArray(body.detail) ? body.detail.map((item) => item.msg).join("; ") : body.detail;
+    throw new Error(detail || `The server answered with HTTP ${response.status}.`);
   }
+  return body;
+}
 
-  closeLists();
-  let rendered = html.join("");
-  for (let i = 0; i < codeBlocks.length; i += 1) {
-    rendered = rendered.replace(`@@CODE_BLOCK_${i}@@`, codeBlocks[i]);
+function searchPath(mode, query, limit) {
+  const search = new URLSearchParams({ q: query, mode, limit });
+  if (state.category) search.set("category", state.category);
+  if (!state.fuzzy) search.set("fuzzy", "false");
+  return `/api/search?${search}`;
+}
+
+function signalLabel(hit, mode) {
+  if (mode === "hybrid") {
+    if (hit.matched_words && hit.similarity !== null) return "Words + meaning";
+    return hit.matched_words ? "Words" : "Meaning";
   }
-  return rendered;
+  return hit.similarity === null ? "" : `Similarity ${hit.similarity.toFixed(2)}`;
 }
 
-function sourceReferenceKeys(source) {
-  return [source?.id, source?.item_id, source?.document_id]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
+function productCard(hit, rank, terms, mode) {
+  products.set(hit.id, hit);
+  const signal = signalLabel(hit, mode);
+  return `<article class="card">
+    <div class="card-media"><span class="rank">${rank}</span><img src="${escapeHtml(thumbnail(hit.image_url, 320))}" alt="" loading="lazy" decoding="async"></div>
+    <div class="card-body">
+      <p class="card-category">${escapeHtml(hit.category)}</p>
+      <h3 class="card-title"><button type="button" class="card-open" data-product="${escapeHtml(hit.id)}">${highlight(hit.title, terms)}</button></h3>
+      <p class="card-features">${highlight(hit.features, terms)}</p>
+      ${signal ? `<p class="signal">${signal}</p>` : ""}
+    </div>
+  </article>`;
 }
 
-function sameReferenceKey(left, right) {
-  if (!left || !right) return false;
-  if (left === right) return true;
-  const numericLeft = /^\d{16,}$/.test(left);
-  const numericRight = /^\d{16,}$/.test(right);
-  if (!numericLeft || !numericRight) return false;
-  return left.slice(0, 15) === right.slice(0, 15);
+function correctedNote(result, className) {
+  return result.corrected ? `<span class="${className}">Showing results for <strong>${escapeHtml(result.corrected)}</strong></span>` : "";
 }
 
-function findSourceReferenceIndex(rawReference, sources, { preferId = false } = {}) {
-  const reference = String(rawReference || "").trim();
-  if (!reference || !Array.isArray(sources) || sources.length === 0) return -1;
-
-  const idIndex = sources.findIndex((source) => sourceReferenceKeys(source).some((key) => sameReferenceKey(key, reference)));
-  if (idIndex >= 0) return idIndex;
-
-  const ordinal = Number(reference);
-  if (!preferId && Number.isInteger(ordinal) && ordinal >= 1 && ordinal <= sources.length) {
-    return ordinal - 1;
-  }
-
-  return -1;
+function setBusy(busy) {
+  if (busy) els.results.setAttribute("aria-busy", "true");
+  else els.results.removeAttribute("aria-busy");
 }
 
-function answerToHtml(answer, sources = []) {
-  let html = markdownToHtml(answer);
-  if (!Array.isArray(sources) || sources.length === 0) return html;
+function showInspector(sqls, request) {
+  els.sql.innerHTML = sqls.map(highlightSql).join("\n\n");
+  els.sql.dataset.raw = sqls.join(";\n");
+  els.request.textContent = request;
+  els.request.dataset.raw = request;
+}
 
-  html = html.replace(/\bID:\s*(\d{8,})/g, (match, rawId) => {
-    const sourceIndex = findSourceReferenceIndex(rawId, sources, { preferId: true });
-    if (sourceIndex < 0) return match;
+function syncUrl(query) {
+  const search = new URLSearchParams({ q: query, mode: state.mode });
+  if (state.category) search.set("category", state.category);
+  if (!state.fuzzy) search.set("fuzzy", "0");
+  history.replaceState(null, "", `?${search}`);
+}
 
-    const displayIndex = sourceIndex + 1;
-    return `ID: <button class="answer-ref answer-id" type="button" data-ref-index="${displayIndex}" aria-label="Show reference ${displayIndex}">${rawId}</button>`;
-  });
-
-  return html.replace(/\[ref:([^\]\s]+)\]|\[(\d+)\]/g, (match, rawRefId, rawIndex) => {
-    const isExplicitRef = Boolean(rawRefId);
-    const rawReference = rawRefId || rawIndex;
-    const sourceIndex = findSourceReferenceIndex(rawReference, sources, { preferId: isExplicitRef });
-    if (sourceIndex < 0) return match;
-
-    const displayIndex = sourceIndex + 1;
-    return `<button class="answer-ref" type="button" data-ref-index="${displayIndex}" aria-label="Show reference ${displayIndex}">[${displayIndex}]</button>`;
+function updateCounts(result) {
+  // A filtered search only counts its own category, so keep the counts from the unfiltered one.
+  if (state.category && result.query === countedQuery && result.mode === "fulltext") return;
+  const counts = new Map(state.category ? [] : (result.facets || []).map((facet) => [facet.value, facet.count]));
+  countedQuery = result.query;
+  els.categories.querySelectorAll("[data-count]").forEach((el) => {
+    el.textContent = counts.has(el.dataset.count) ? counts.get(el.dataset.count).toLocaleString("en") : "";
   });
 }
 
-function ensureReferencePreview() {
-  if (referencePreviewEl) return referencePreviewEl;
-  referencePreviewEl = document.createElement("aside");
-  referencePreviewEl.className = "reference-preview hidden";
-  referencePreviewEl.hidden = true;
-  referencePreviewEl.setAttribute("aria-hidden", "true");
-  document.body.appendChild(referencePreviewEl);
-  referencePreviewEl.addEventListener("mouseenter", () => {
-    if (referencePreviewHideTimer) {
-      window.clearTimeout(referencePreviewHideTimer);
-      referencePreviewHideTimer = null;
-    }
+async function submit() {
+  const query = els.query.value.trim();
+  if (!query) return;
+  searchController?.abort();
+  const controller = (searchController = new AbortController());
+  syncUrl(query);
+  setBusy(true);
+  try {
+    if (state.mode === "chat") await runChat(query, controller.signal);
+    else if (state.mode === "compare") await runCompare(query, controller.signal);
+    else await runSearch(query, controller.signal);
+  } catch (error) {
+    if (error.name !== "AbortError") els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+  } finally {
+    if (controller === searchController) setBusy(false);
+  }
+}
+
+async function runSearch(query, signal) {
+  const path = searchPath(state.mode, query, RESULTS_LIMIT);
+  const result = await api(path, {}, signal);
+  showInspector([result.sql], `curl ${shellQuote(location.origin + path)}`);
+  updateCounts(result);
+  const found =
+    result.mode === "fulltext"
+      ? `${result.total.toLocaleString("en")} ${result.total === 1 ? "product" : "products"}`
+      : `Top ${result.hits.length} by ${result.mode === "vector" ? "meaning" : "words and meaning"}`;
+  els.status.innerHTML = `${correctedNote(result, "corrected")}<span>${found} in ${result.took_ms} ms</span>`;
+  els.output.innerHTML = result.hits.length
+    ? `<div class="grid">${result.hits.map((hit, index) => productCard(hit, index + 1, result.terms, result.mode)).join("")}</div>`
+    : `<p class="empty">No products match. Try fewer words${result.fuzzy ? "" : " or turn on typo tolerance"}.</p>`;
+}
+
+async function runCompare(query, signal) {
+  const paths = COMPARED_MODES.map((mode) => searchPath(mode, query, COMPARE_LIMIT));
+  const results = await Promise.all(paths.map((path) => api(path, {}, signal)));
+  const foundBy = new Map();
+  results.forEach((result) => result.hits.forEach((hit) => foundBy.set(hit.id, (foundBy.get(hit.id) || 0) + 1)));
+  showInspector(
+    results.map((result) => result.sql),
+    paths.map((path) => `curl ${shellQuote(location.origin + path)}`).join("\n"),
+  );
+  updateCounts(results[0]);
+  els.status.innerHTML = "<span>The same query in three search types. Products found by more than one are marked.</span>";
+  els.output.innerHTML = `<div class="compare">${results.map((result) => compareColumn(result, foundBy)).join("")}</div>`;
+}
+
+function compareColumn(result, foundBy) {
+  const items = result.hits
+    .map((hit) => {
+      products.set(hit.id, hit);
+      const count = foundBy.get(hit.id);
+      const shared = count > 1 ? `<span class="shared">${count === COMPARED_MODES.length ? "Found by all three" : "Found by two"}</span>` : "";
+      return `<li class="compare-item" data-id="${escapeHtml(hit.id)}">
+        <img src="${escapeHtml(thumbnail(hit.image_url, 160))}" alt="" loading="lazy" decoding="async">
+        <div><button type="button" class="card-open" data-product="${escapeHtml(hit.id)}">${highlight(hit.title, result.terms)}</button>${shared}</div>
+      </li>`;
+    })
+    .join("");
+  return `<section class="compare-col">
+    <header><h3>${MODES[result.mode].label}</h3><span>${result.took_ms} ms</span></header>
+    ${result.corrected ? `<p class="compare-note">${correctedNote(result, "corrected")}</p>` : ""}
+    ${items ? `<ol class="compare-list">${items}</ol>` : '<p class="empty">No matches</p>'}
+  </section>`;
+}
+
+function chatSql(message) {
+  return `CALL CHAT(${[message, TABLE, CHAT_MODEL, state.conversation || "", VECTOR_FIELD].map(sqlString).join(", ")})`;
+}
+
+function chatRequest(message) {
+  const body = JSON.stringify({ message, conversation_uuid: state.conversation });
+  return `curl -X POST ${shellQuote(`${location.origin}/api/assistant/chat`)} \\\n  -H 'Content-Type: application/json' \\\n  -d ${shellQuote(body)}`;
+}
+
+function turnHtml({ message, result }) {
+  const sources = result.sources.map((source) => ({ ...source, id: String(source.id), matched_words: false, similarity: null }));
+  let answer = escapeHtml(result.response);
+  sources.forEach((source, index) => {
+    const ref = `<button type="button" class="ref" data-product="${escapeHtml(source.id)}" aria-label="Product ${index + 1}: ${escapeHtml(source.title)}">${index + 1}</button>`;
+    answer = answer.split(`[ref:${source.id}]`).join(ref);
   });
-  referencePreviewEl.addEventListener("mouseleave", hideReferencePreview);
-  return referencePreviewEl;
+  const paragraphs = answer
+    .replace(/\[ref:[^\]]*\]/g, "")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .split(/\n\s*\n/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<article class="turn">
+    <p class="turn-question">${escapeHtml(message)}</p>
+    <div class="answer">${paragraphs}</div>
+    ${result.search_query ? `<p class="turn-search">Manticore searched for <strong>${escapeHtml(result.search_query)}</strong></p>` : ""}
+    <div class="grid grid--sources">${sources.map((source, index) => productCard(source, index + 1, [], "chat")).join("")}</div>
+  </article>`;
 }
 
-function renderReferencePreview(item, index) {
-  const preview = ensureReferencePreview();
-  const imageUrl = productImageUrl(item);
-  const body = String(item?.description || item?.text || item?.content || "").trim();
-  const title = String(item?.title || "").trim() || body.split(/(?<=[.!?])\s+/)[0] || `Reference ${index}`;
-  const description = body.length > 150 ? `${body.slice(0, 150)}...` : body;
+function renderChat() {
+  els.output.innerHTML = state.turns.length
+    ? `${state.turns.map(turnHtml).join("")}<button type="button" class="link-button" data-new-chat>Start a new conversation</button>`
+    : '<p class="empty">Ask a shopping question. Manticore finds matching products, and the AI answers using only those products.</p>';
+}
 
-  preview.innerHTML = "";
+function showChat() {
+  const message = els.query.value.trim();
+  syncUrl(message);
+  showInspector([chatSql(message)], chatRequest(message));
+  els.status.innerHTML = "<span>Answers take 5 to 15 seconds.</span>";
+  renderChat();
+}
 
-  const media = document.createElement("div");
-  media.className = "reference-preview-media";
-  if (imageUrl) {
-    const image = document.createElement("img");
-    image.src = imageUrl;
-    image.alt = title;
-    media.appendChild(image);
-  } else {
-    media.textContent = "No image";
+async function runChat(message, signal) {
+  showInspector([chatSql(message)], chatRequest(message));
+  els.status.innerHTML = "<span>Finding products and writing an answer. This takes 5 to 15 seconds.</span>";
+  const result = await api(
+    "/api/assistant/chat",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, conversation_uuid: state.conversation }) },
+    signal,
+  );
+  state.conversation = result.conversation_uuid;
+  state.turns.push({ message, result });
+  els.status.innerHTML = `<span>Answer based on ${result.sources.length} products</span>`;
+  renderChat();
+  els.query.value = "";
+  els.query.placeholder = "Ask a follow-up question";
+  els.output.querySelector(".turn:last-of-type").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+async function openProduct(id) {
+  const hit = products.get(id);
+  els.productImage.src = thumbnail(hit.image_url, 640);
+  els.productImage.alt = hit.title;
+  els.productCategory.textContent = hit.category;
+  els.productTitle.textContent = hit.title;
+  els.productDescription.textContent = hit.description;
+  els.productFeatures.innerHTML = hit.features
+    .split(/,\s*/)
+    .filter(Boolean)
+    .map((feature) => `<li>${escapeHtml(feature)}</li>`)
+    .join("");
+  els.similar.innerHTML = '<p class="muted">Finding similar products…</p>';
+  els.similarSql.textContent = "";
+  if (!els.dialog.open) els.dialog.showModal();
+  els.dialog.scrollTop = 0;
+
+  similarController?.abort();
+  similarController = new AbortController();
+  try {
+    const result = await api(`/api/similar/${encodeURIComponent(id)}`, {}, similarController.signal);
+    els.similar.innerHTML = `<div class="grid">${result.hits.map((similar, index) => productCard(similar, index + 1, [], "similar")).join("")}</div>`;
+    els.similarSql.innerHTML = highlightSql(result.sql);
+  } catch (error) {
+    if (error.name !== "AbortError") els.similar.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
   }
-
-  const copy = document.createElement("div");
-  copy.className = "reference-preview-copy";
-
-  const eyebrow = document.createElement("p");
-  eyebrow.className = "reference-preview-eyebrow";
-  eyebrow.textContent = `Reference ${index}${item?.category ? ` · ${item.category}` : ""}`;
-
-  const heading = document.createElement("h3");
-  heading.textContent = title.slice(0, 120);
-
-  const price = document.createElement("p");
-  price.className = "reference-preview-price";
-  price.textContent = `${productPrice(item)} · ${productRating(item)}`;
-
-  const text = document.createElement("p");
-  text.className = "reference-preview-text";
-  text.textContent = description || "No product description available.";
-
-  copy.append(eyebrow, heading, price, text);
-  preview.append(media, copy);
-  return preview;
 }
 
-function positionReferencePreview(preview, target) {
-  const rect = target.getBoundingClientRect();
-  preview.classList.remove("hidden");
-  preview.hidden = false;
-  preview.style.left = "0px";
-  preview.style.top = "0px";
-
-  const previewRect = preview.getBoundingClientRect();
-  const gap = 10;
-  const margin = 12;
-  let left = rect.left + rect.width / 2 - previewRect.width / 2;
-  left = Math.max(margin, Math.min(left, window.innerWidth - previewRect.width - margin));
-  let top = rect.bottom + gap;
-  if (top + previewRect.height + margin > window.innerHeight) {
-    top = rect.top - previewRect.height - gap;
-  }
-  top = Math.max(margin, top);
-  preview.style.left = `${left}px`;
-  preview.style.top = `${top}px`;
+async function randomQuestion() {
+  questionBank ??= api("/static/example_questions.json");
+  const questions = (await questionBank).flatMap((example) => example.questions.map((question) => question.text));
+  return questions[Math.floor(Math.random() * questions.length)];
 }
 
-function showReferencePreview(target, index) {
-  const item = currentVisibleSources[index - 1];
-  if (!target || !item) return;
-  if (referencePreviewHideTimer) {
-    window.clearTimeout(referencePreviewHideTimer);
-    referencePreviewHideTimer = null;
-  }
-  const preview = renderReferencePreview(item, index);
-  positionReferencePreview(preview, target);
-  preview.setAttribute("aria-hidden", "false");
+function renderExamples() {
+  const buttons = MODES[state.mode].examples.map((example) => `<button type="button" data-example="${escapeHtml(example)}">${escapeHtml(example)}</button>`);
+  if (state.mode === "chat") buttons.push('<button type="button" data-random>Random shopper question</button>');
+  els.examples.innerHTML = `<span>Try</span>${buttons.join("")}`;
 }
 
-function hideReferencePreview({ delay = 120 } = {}) {
-  if (!referencePreviewEl) return;
-  if (referencePreviewHideTimer) {
-    window.clearTimeout(referencePreviewHideTimer);
-  }
-  referencePreviewHideTimer = window.setTimeout(() => {
-    referencePreviewEl.classList.add("hidden");
-    referencePreviewEl.hidden = true;
-    referencePreviewEl.setAttribute("aria-hidden", "true");
-  }, delay);
+function setMode(mode) {
+  // Search types share a query so their results can be compared; a question for the AI reads differently.
+  const switchesKind = (mode === "chat") !== (state.mode === "chat");
+  state.mode = mode;
+  document.body.dataset.mode = mode;
+  els.tabs.forEach((tab) => {
+    const selected = tab.dataset.tab === mode;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  });
+  els.fuzzy.disabled = mode === "vector";
+  els.submit.textContent = mode === "chat" ? "Ask" : "Search";
+  els.query.placeholder = mode === "chat" ? "Ask a shopping question" : "Search products";
+  if (mode === "chat") els.query.removeAttribute("list");
+  else els.query.setAttribute("list", "suggestions");
+  els.explain.textContent = MODES[mode].explain;
+  renderExamples();
+  if (switchesKind) els.query.value = MODES[mode].examples[0];
+  if (mode === "chat") showChat();
+  else submit();
 }
 
-function focusSourceReference(index) {
-  const card = gridEl.querySelector(`[data-source-index="${index}"]`);
-  if (!card) return;
-  card.classList.add("source-ref-flash");
-  card.scrollIntoView({ behavior: "smooth", block: "center" });
-  window.setTimeout(() => card.classList.remove("source-ref-flash"), 1400);
-}
+els.form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submit();
+});
 
-function openSourceReference(index) {
-  const item = currentVisibleSources[index - 1];
-  if (!item) return;
-  hideReferencePreview({ delay: 0 });
-  renderCommentModal(item);
-  setProductModalOpen(true);
-}
-
-async function submitFollowup(inputEl) {
-  const text = inputEl.value.trim();
-  if (!text) return;
-  inputEl.value = "";
-  inputEl.style.height = "auto";
-  await askAi({ message: text });
-  inputEl.focus();
-}
-
-function resizeFollowup() {
-  resizeTextarea(followupInputEl, 160);
-}
-
-function submitOnEnter(event, callback) {
-  if (event.key === "Enter" && !event.shiftKey) {
+els.tabs.forEach((tab, index) => {
+  tab.addEventListener("click", () => {
+    if (tab.dataset.tab !== state.mode) setMode(tab.dataset.tab);
+  });
+  tab.addEventListener("keydown", (event) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (!step) return;
     event.preventDefault();
-    callback();
-  }
-}
-
-homeFormEl.addEventListener("submit", (event) => {
-  event.preventDefault();
-  activeExampleQuestion = null;
-  renderExampleCards();
-  askAi({ resetConversation: true });
-});
-homeRandomQuestionBtn.addEventListener("click", chooseRandomQuestionForHome);
-homeQueryEl.addEventListener("input", () => resizeTextarea(homeQueryEl, 180));
-homeQueryEl.addEventListener("keydown", (event) => submitOnEnter(event, () => homeFormEl.requestSubmit()));
-if (homeCustomPromptEl) {
-  homeCustomPromptEl.addEventListener("input", () => {
-    syncCustomPrompt(homeCustomPromptEl.value, homeCustomPromptEl);
-    resizeTextarea(homeCustomPromptEl, 220);
+    const next = els.tabs[(index + step + els.tabs.length) % els.tabs.length];
+    next.focus();
+    setMode(next.dataset.tab);
   });
-}
-resultsTopFormEl.addEventListener("submit", (event) => {
-  event.preventDefault();
-  activeExampleQuestion = null;
-  renderExampleCards();
-  askAi({ message: resultsQueryEl.value, resetConversation: true });
 });
-resultsQueryEl.addEventListener("input", () => resizeTextarea(resultsQueryEl, 150));
-resultsQueryEl.addEventListener("keydown", (event) => submitOnEnter(event, () => resultsTopFormEl.requestSubmit()));
-resultsCustomPromptEl.addEventListener("input", () => {
-  syncCustomPrompt(resultsCustomPromptEl.value, resultsCustomPromptEl);
-  resizeTextarea(resultsCustomPromptEl, 220);
+
+els.fuzzy.addEventListener("change", () => {
+  state.fuzzy = els.fuzzy.checked;
+  submit();
 });
-followupFormEl.addEventListener("submit", (event) => {
-  event.preventDefault();
-  submitFollowup(followupInputEl);
+
+els.categories.addEventListener("change", (event) => {
+  state.category = event.target.value;
+  submit();
 });
-followupInputEl.addEventListener("input", resizeFollowup);
-followupInputEl.addEventListener("keydown", (event) => submitOnEnter(event, () => submitFollowup(followupInputEl)));
-aiHistoryEl.addEventListener("click", (event) => {
-  const refButton = event.target.closest(".answer-ref");
-  if (!refButton) return;
-  openSourceReference(Number(refButton.dataset.refIndex || 0));
+
+els.examples.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  els.query.value = "example" in button.dataset ? button.dataset.example : await randomQuestion();
+  submit();
 });
-aiHistoryEl.addEventListener("mouseover", (event) => {
-  const refButton = event.target.closest(".answer-ref");
-  if (!refButton) return;
-  showReferencePreview(refButton, Number(refButton.dataset.refIndex || 0));
+
+els.query.addEventListener("input", () => {
+  clearTimeout(suggestTimer);
+  if (state.mode === "chat") return;
+  if (!els.query.value.trim()) {
+    els.suggestions.innerHTML = "";
+    return;
+  }
+  suggestTimer = setTimeout(async () => {
+    suggestController?.abort();
+    suggestController = new AbortController();
+    try {
+      const { suggestions } = await api(`/api/autocomplete?${new URLSearchParams({ q: els.query.value })}`, {}, suggestController.signal);
+      els.suggestions.innerHTML = suggestions.map((suggestion) => `<option value="${escapeHtml(suggestion)}"></option>`).join("");
+    } catch (error) {
+      if (error.name !== "AbortError") els.suggestions.innerHTML = "";
+    }
+  }, AUTOCOMPLETE_DELAY_MS);
 });
-aiHistoryEl.addEventListener("focusin", (event) => {
-  const refButton = event.target.closest(".answer-ref");
-  if (!refButton) return;
-  showReferencePreview(refButton, Number(refButton.dataset.refIndex || 0));
+
+els.output.addEventListener("mouseover", (event) => {
+  const item = event.target.closest(".compare-item");
+  els.output.querySelectorAll(".is-hover").forEach((el) => el.classList.remove("is-hover"));
+  if (item) els.output.querySelectorAll(`.compare-item[data-id="${item.dataset.id}"]`).forEach((el) => el.classList.add("is-hover"));
 });
-aiHistoryEl.addEventListener("mouseout", (event) => {
-  if (!event.target.closest(".answer-ref")) return;
-  hideReferencePreview();
+
+els.dialog.addEventListener("click", (event) => {
+  if (event.target === els.dialog) els.dialog.close();
 });
-aiHistoryEl.addEventListener("focusout", (event) => {
-  if (!event.target.closest(".answer-ref")) return;
-  hideReferencePreview({ delay: 0 });
-});
-productModalBackdropBtn.addEventListener("click", () => setProductModalOpen(false));
-productModalCloseBtn.addEventListener("click", () => setProductModalOpen(false));
-window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !productModalEl.classList.contains("hidden")) {
-    setProductModalOpen(false);
+
+document.addEventListener("click", (event) => {
+  const product = event.target.closest("[data-product]");
+  if (product) {
+    openProduct(product.dataset.product);
+    return;
+  }
+  const copy = event.target.closest("[data-copy]");
+  if (copy) {
+    navigator.clipboard.writeText($(copy.dataset.copy).dataset.raw);
+    copy.textContent = "Copied";
+    setTimeout(() => {
+      copy.textContent = "Copy";
+    }, COPIED_MS);
+    return;
+  }
+  if (event.target.closest("[data-new-chat]")) {
+    state.conversation = null;
+    state.turns = [];
+    els.query.value = MODES.chat.examples[0];
+    showChat();
+    els.query.focus();
   }
 });
 
-setResultsVisible(false);
-setAiVisible(false);
-clearAiConversation();
-renderComments([]);
-resizeQueryTextareas();
-setProductModalOpen(false);
-loadExampleBank();
+els.fuzzy.checked = state.fuzzy;
+const categoryInput = els.categories.querySelector(`input[value="${CSS.escape(state.category)}"]`);
+if (categoryInput) categoryInput.checked = true;
+else state.category = "";
+els.query.value = params.get("q") || MODES[state.mode].examples[0];
+setMode(state.mode);

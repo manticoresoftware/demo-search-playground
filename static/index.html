@@ -3,130 +3,106 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Manticore Shop Demo</title>
+    <title>Manticore Search Playground</title>
+    <meta name="description" content="Try full-text, vector, hybrid and AI search on 82,524 clothing products, and see the SQL behind every result." />
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="shortcut icon" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260717search8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260915" />
   </head>
   <body>
-    <main id="home-screen" class="home-screen">
-      <div class="home-brand" aria-label="Manticore Shop Demo">
-        <img class="home-brand-logo" src="/static/manticore-logo-mark.png" alt="Manticore Search" />
-        <h1 class="home-title">Manticore Shop Demo</h1>
-      </div>
-      <p class="home-subtitle">Conversational search over 82,524 products.</p>
-      <p class="home-article-link">
-        Manticore retrieves the products; an LLM answers using only those results.<br />
-        <a href="https://github.com/manticoresoftware/demo-conversational-search" target="_blank" rel="noopener noreferrer">Source code</a>
-        ·
-        <a href="https://manticoresearch.com/blog/conversational-search/" target="_blank" rel="noopener noreferrer">How it works</a>
-      </p>
-      <form id="home-form" class="home-search" aria-label="Search Manticore Shop Demo">
-        <div class="home-search-box">
-          <button id="home-random-question-btn" class="home-random-question-btn" type="button" aria-label="Try another shopping request" title="Try another shopping request">↻</button>
-          <textarea id="home-query" rows="1" placeholder="Ask AI" autofocus></textarea>
-          <button id="home-search-btn" type="submit" aria-label="Ask AI">↑</button>
+    <header class="topbar">
+      <a class="brand" href="/">
+        <img src="/static/manticore-logo-mark.png" alt="" width="32" height="32" />
+        <span>Manticore Search <strong>Playground</strong></span>
+      </a>
+      <nav class="topbar-links" aria-label="Project links">
+        <a href="https://manual.manticoresearch.com/" target="_blank" rel="noopener">Manual</a>
+        <a href="https://github.com/manticoresoftware/demo-search-playground" target="_blank" rel="noopener">Source code</a>
+      </nav>
+    </header>
+
+    <main class="page">
+      <section class="composer">
+        <h1>Search 82,524 clothing products four ways</h1>
+        <p class="lede">Try full-text, vector, hybrid and AI search on the same catalog, and see the exact SQL Manticore runs for every result.</p>
+
+        <div class="modes" role="tablist" aria-label="Search type">
+          <button type="button" role="tab" data-tab="fulltext" aria-controls="results">Full-text</button>
+          <button type="button" role="tab" data-tab="vector" aria-controls="results">Vector</button>
+          <button type="button" role="tab" data-tab="hybrid" aria-controls="results">Hybrid</button>
+          <button type="button" role="tab" data-tab="compare" aria-controls="results">Compare all three</button>
+          <button type="button" role="tab" data-tab="chat" aria-controls="results">Ask AI</button>
         </div>
-        <p class="home-guided-hint">Try a realistic shopper request from the dataset, then inspect matching product cards and sources.</p>
-      </form>
 
-      <section id="home-example-card" class="example-card home-example-card" aria-label="Example question picker"></section>
-    </main>
+        <form id="search-form" class="search" role="search">
+          <label class="sr-only" for="query">Search query</label>
+          <input id="query" name="q" type="search" list="suggestions" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+          <datalist id="suggestions"></datalist>
+          <button id="submit" class="button" type="submit">Search</button>
+        </form>
 
-    <main id="results-screen" class="container hidden" hidden>
-      <header class="results-header">
-        <div class="results-header-inner">
-          <a class="results-brand" href="/" aria-label="Manticore Shop Demo home">
-            <img class="results-brand-logo" src="/static/manticore-logo-mark.png" alt="Manticore Search" />
-            <span>Manticore Shop Demo</span>
-          </a>
-          <form id="results-top-form" class="standard-search results-top-search" aria-label="Search apparel products from results">
-            <textarea id="results-query" rows="1" placeholder="Ask AI"></textarea>
-            <button id="results-search-btn" type="submit" aria-label="Ask AI">↑</button>
-          </form>
-          <details class="prompt-settings results-prompt-settings">
-            <summary>Customize answer prompt</summary>
-            <label class="prompt-label" for="results-custom-prompt">Custom prompt</label>
-            <textarea id="results-custom-prompt" rows="5" placeholder="Optional. Leave empty to use the default shopping assistant prompt."></textarea>
-            <p class="prompt-hint">Non-empty prompts are sent with each request and mapped to a reusable hashed chat model.</p>
-          </details>
+        <div class="filters">
+          <label class="toggle"><input id="fuzzy" type="checkbox" checked /> Typo tolerance</label>
+          <fieldset id="categories" class="categories">
+            <legend class="sr-only">Category</legend>
+            <label><input type="radio" name="category" value="" checked /><span>All</span></label>
+            <label><input type="radio" name="category" value="tops" /><span>Tops <em data-count="tops"></em></span></label>
+            <label><input type="radio" name="category" value="bottoms" /><span>Bottoms <em data-count="bottoms"></em></span></label>
+            <label><input type="radio" name="category" value="footwear" /><span>Footwear <em data-count="footwear"></em></span></label>
+            <label><input type="radio" name="category" value="outerwear" /><span>Outerwear <em data-count="outerwear"></em></span></label>
+          </fieldset>
         </div>
-      </header>
 
-      <div class="results-layout">
-        <aside id="results-example-card" class="example-card results-example-card" aria-label="Grounding document and generated questions"></aside>
-
-        <section class="results-panel">
-          <div id="error-banner" class="error-banner hidden" role="alert" hidden></div>
-
-          <section id="ai-overview" class="ai-overview" aria-live="polite">
-            <div id="ai-history" class="ai-history"></div>
-            <div id="ai-answer" class="ai-answer hidden" hidden>
-              <p>Ask for shoes, jackets, tops, or bottoms. Matching ConvApparel product sources will appear below.</p>
-            </div>
-          </section>
-
-          <form id="followup-form" class="followup-form" aria-label="Ask a follow-up question">
-            <textarea id="followup-input" rows="1" placeholder="Ask a follow-up"></textarea>
-            <button id="followup-send-btn" type="submit" aria-label="Send follow-up">↑</button>
-          </form>
-
-          <section id="source-results" class="source-results hidden" hidden>
-            <h2>Products</h2>
-            <p id="meta"></p>
-            <div id="grid" class="grid"></div>
-            <div class="pagination" hidden>
-              <button id="prev-page-btn" type="button">Previous</button>
-              <div id="page-buttons" class="page-buttons"></div>
-              <p id="page-meta" class="page-meta"></p>
-              <button id="next-page-btn" type="button">Next</button>
-            </div>
-          </section>
-        </section>
-      </div>
-    </main>
-
-    <div id="product-modal" class="product-modal hidden" hidden>
-      <button id="product-modal-backdrop" class="product-modal-backdrop" type="button" aria-label="Close product details"></button>
-      <section class="product-modal-card">
-        <div class="product-modal-head">
-          <h2 id="product-modal-title">Product</h2>
-          <button id="product-modal-close-btn" class="product-modal-close-btn" type="button" aria-label="Close">×</button>
-        </div>
-        <div class="product-page">
-          <div class="product-page-media">
-            <img id="product-modal-image" class="product-page-image" alt="" />
-          </div>
-          <div class="product-page-main">
-            <p id="product-modal-rating" class="product-page-rating"></p>
-            <p id="product-modal-price" class="product-page-price"></p>
-            <p id="product-modal-description" class="product-page-description"></p>
-          </div>
-        </div>
+        <div id="examples" class="examples"></div>
       </section>
-    </div>
 
-    <template id="card-template">
-      <article class="card feed-card">
-        <div class="card-media">
-          <img class="product-image" alt="" />
-          <div class="image-fallback">No image</div>
-        </div>
-        <div class="card-body">
-          <p class="category-pill"></p>
-          <h3 class="title"></h3>
-          <p class="price"></p>
-          <p class="rating"></p>
-          <p class="bought"></p>
-          <p class="delivery"></p>
-          <p class="description"></p>
-          <div class="tags">
-            <span class="tag color"></span>
+      <div class="workspace">
+        <section id="results" class="results" aria-label="Results">
+          <div id="status" class="status" aria-live="polite"></div>
+          <div id="output"></div>
+        </section>
+
+        <aside class="inspector" aria-label="Under the hood">
+          <div class="inspector-head">
+            <h2>SQL Manticore ran</h2>
+            <button type="button" class="copy" data-copy="sql">Copy</button>
           </div>
-        </div>
-      </article>
-    </template>
+          <pre id="sql" class="code"></pre>
+          <div class="inspector-head">
+            <h2>Same request through the API</h2>
+            <button type="button" class="copy" data-copy="request">Copy</button>
+          </div>
+          <pre id="request" class="code code--light"></pre>
+          <h2>How it works</h2>
+          <p id="explain" class="explain"></p>
+        </aside>
+      </div>
+    </main>
 
-    <script src="/static/app.js?v=20260717search7"></script>
+    <footer class="footer">
+      Products from the <a href="https://huggingface.co/datasets/google/ConvApparel" target="_blank" rel="noopener">ConvApparel dataset</a>, searched with <a href="https://manticoresearch.com/" target="_blank" rel="noopener">Manticore Search</a>.
+    </footer>
+
+    <dialog id="product" class="product" aria-labelledby="product-title">
+      <form method="dialog"><button class="product-close" aria-label="Close">×</button></form>
+      <div class="product-main">
+        <img id="product-image" alt="" />
+        <div>
+          <p id="product-category" class="product-category"></p>
+          <h2 id="product-title"></h2>
+          <p id="product-description" class="product-description"></p>
+          <ul id="product-features" class="features"></ul>
+        </div>
+      </div>
+      <section class="similar" aria-labelledby="similar-title">
+        <h3 id="similar-title">Similar products</h3>
+        <div id="similar"></div>
+        <pre id="similar-sql" class="code code--light"></pre>
+      </section>
+    </dialog>
+
+    <script src="/static/app.js?v=20260915"></script>
   </body>
 </html>

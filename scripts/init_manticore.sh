@@ -35,26 +35,26 @@ docker exec "$container_id" sh -c "exec mysql -e \"DROP TABLE IF EXISTS $TABLE_N
 docker exec "$container_id" sh -c 'exec mysql -e "DROP CHAT MODEL IF EXISTS assistant"' >/dev/null 2>&1 || true
 docker exec "$container_id" sh -c 'exec mysql -e "DROP CHAT MODEL IF EXISTS assistant_gpt41mini"' >/dev/null 2>&1 || true
 
+dump_sql() {
+  case "${table_dump_parts[0]}" in
+    *.sql.xz.part-*) cat "${table_dump_parts[@]}" | xz -cd ;;
+    *.sql.gz.part-*) cat "${table_dump_parts[@]}" | gzip -cd ;;
+    *.part-*) cat "${table_dump_parts[@]}" | tar -xOzf - "$TABLE_DUMP_MEMBER" ;;
+    *.tar.gz|*.tgz) tar -xOzf "${table_dump_parts[0]}" "$TABLE_DUMP_MEMBER" ;;
+    *.gz) gzip -cd "${table_dump_parts[0]}" ;;
+    *) cat "${table_dump_parts[0]}" ;;
+  esac
+}
+
+# Fuzzy search and autocomplete need infixes; category facets need a string attribute.
+patch_schema() {
+  sed -e '1,/^);$/{' \
+    -e 's/^`category` text,$/`category` string attribute indexed,/' \
+    -e "s/^);\$/) min_infix_len='2';/" \
+    -e '}'
+}
+
 echo "Restoring $TABLE_DUMP..."
-case "${table_dump_parts[0]}" in
-  *.sql.xz.part-*)
-    cat "${table_dump_parts[@]}" | xz -cd | docker exec -i "$container_id" sh -c 'exec mysql'
-    ;;
-  *.sql.gz.part-*)
-    cat "${table_dump_parts[@]}" | gzip -cd | docker exec -i "$container_id" sh -c 'exec mysql'
-    ;;
-  *.part-*)
-    cat "${table_dump_parts[@]}" | tar -xOzf - "$TABLE_DUMP_MEMBER" | docker exec -i "$container_id" sh -c 'exec mysql'
-    ;;
-  *.tar.gz|*.tgz)
-    tar -xOzf "${table_dump_parts[0]}" "$TABLE_DUMP_MEMBER" | docker exec -i "$container_id" sh -c 'exec mysql'
-    ;;
-  *.gz)
-    gzip -cd "${table_dump_parts[0]}" | docker exec -i "$container_id" sh -c 'exec mysql'
-    ;;
-  *)
-    docker exec -i "$container_id" sh -c 'exec mysql' < "${table_dump_parts[0]}"
-    ;;
-esac
+dump_sql | patch_schema | docker exec -i "$container_id" sh -c 'exec mysql'
 
 echo "Manticore initialization complete."
