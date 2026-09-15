@@ -436,7 +436,7 @@ function setMode(mode) {
     tab.tabIndex = selected ? 0 : -1;
   });
   els.fuzzy.disabled = mode === "vector" || mode === "image";
-  els.submit.textContent = mode === "chat" ? "Ask" : "Search";
+  els.submit.textContent = mode === "chat" ? "Ask AI" : "Search";
   els.query.placeholder = mode === "chat" ? "Ask a shopping question" : "Search products";
   if (mode === "chat") els.query.removeAttribute("list");
   else els.query.setAttribute("list", "suggestions");
