@@ -2,6 +2,8 @@ const RESULTS_LIMIT = 12;
 const COMPARE_LIMIT = 8;
 const COMPARED_MODES = ["fulltext", "vector", "hybrid"];
 const AUTOCOMPLETE_DELAY_MS = 150;
+// Matches MAX_PHOTO_BYTES in app.py.
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const COPIED_MS = 1500;
 // Words under 3 letters would mark half of every title.
 const MIN_HIGHLIGHT_LENGTH = 3;
@@ -27,6 +29,12 @@ const MODES = {
     examples: ["comfy shoes for standing all day", "warm waterprof jacket", "summer dress for a beach wedding"],
     explain:
       "Runs the full-text and vector searches in parallel and merges both rankings with Reciprocal Rank Fusion (OPTION fusion_method='rrf'). Each product shows which search found it.",
+  },
+  image: {
+    label: "Image",
+    examples: ["red plaid flannel shirt", "white sneakers with a gum sole", "floral summer dress"],
+    explain:
+      "Fashion CLIP turns your words or photo into a vector in the same space as the product photos. Manticore finds the nearest photo vectors in an HNSW index, then loads those products by id. Upload, drop or paste a photo to search by look.",
   },
   compare: {
     label: "Compare",
@@ -66,6 +74,12 @@ const els = {
   productFeatures: $("product-features"),
   similar: $("similar"),
   similarSql: $("similar-sql"),
+  similarPhoto: $("similar-photo"),
+  similarPhotoSql: $("similar-photo-sql"),
+  photoInput: $("photo-input"),
+  photoPreview: $("photo-preview"),
+  photoImage: $("photo-image"),
+  photoClear: $("photo-clear"),
 };
 
 const params = new URLSearchParams(location.search);
@@ -75,6 +89,7 @@ const state = {
   fuzzy: params.get("fuzzy") !== "0",
   conversation: null,
   turns: [],
+  photo: null,
 };
 const products = new Map();
 let countedQuery = null;
@@ -139,6 +154,12 @@ function searchPath(mode, query, limit) {
   return `/api/search?${search}`;
 }
 
+function photoPath(limit) {
+  const search = new URLSearchParams({ limit });
+  if (state.category) search.set("category", state.category);
+  return `/api/search/image?${search}`;
+}
+
 function signalLabel(hit, mode) {
   if (mode === "hybrid") {
     if (hit.matched_words && hit.similarity !== null) return "Words + meaning";
@@ -178,7 +199,8 @@ function showInspector(sqls, request) {
 }
 
 function syncUrl(query) {
-  const search = new URLSearchParams({ q: query, mode: state.mode });
+  const search = new URLSearchParams({ mode: state.mode });
+  if (query) search.set("q", query);
   if (state.category) search.set("category", state.category);
   if (!state.fuzzy) search.set("fuzzy", "0");
   history.replaceState(null, "", `?${search}`);
@@ -196,10 +218,11 @@ function updateCounts(result) {
 
 async function submit() {
   const query = els.query.value.trim();
-  if (!query) return;
+  const byPhoto = state.mode === "image" && state.photo;
+  if (!query && !byPhoto) return;
   searchController?.abort();
   const controller = (searchController = new AbortController());
-  syncUrl(query);
+  syncUrl(byPhoto ? "" : query);
   setBusy(true);
   try {
     if (state.mode === "chat") await runChat(query, controller.signal);
@@ -213,18 +236,26 @@ async function submit() {
 }
 
 async function runSearch(query, signal) {
-  const path = searchPath(state.mode, query, RESULTS_LIMIT);
-  const result = await api(path, {}, signal);
-  showInspector([result.sql], `curl ${shellQuote(location.origin + path)}`);
+  const photo = state.mode === "image" ? state.photo : null;
+  const path = photo ? photoPath(RESULTS_LIMIT) : searchPath(state.mode, query, RESULTS_LIMIT);
+  const result = photo
+    ? await api(path, { method: "POST", headers: { "Content-Type": photo.type }, body: photo }, signal)
+    : await api(path, {}, signal);
+  const request = photo
+    ? `curl -X POST ${shellQuote(location.origin + path)} \\\n  -H ${shellQuote(`Content-Type: ${photo.type}`)} \\\n  --data-binary @${shellQuote(photo.name)}`
+    : `curl ${shellQuote(location.origin + path)}`;
+  showInspector([result.sql], request);
   updateCounts(result);
+  const rankedBy = { vector: "meaning", hybrid: "words and meaning", image: "look" }[result.mode];
   const found =
     result.mode === "fulltext"
       ? `${result.total.toLocaleString("en")} ${result.total === 1 ? "product" : "products"}`
-      : `Top ${result.hits.length} by ${result.mode === "vector" ? "meaning" : "words and meaning"}`;
-  els.status.innerHTML = `${correctedNote(result, "corrected")}<span>${found} in ${result.took_ms} ms</span>`;
+      : `Top ${result.hits.length} by ${rankedBy}`;
+  const embedded = result.mode === "image" ? `<span>${photo ? "Photo" : "Query"} turned into a vector in ${result.embed_ms} ms</span>` : "";
+  els.status.innerHTML = `${correctedNote(result, "corrected")}<span>${found} in ${result.took_ms} ms</span>${embedded}`;
   els.output.innerHTML = result.hits.length
     ? `<div class="grid">${result.hits.map((hit, index) => productCard(hit, index + 1, result.terms, result.mode)).join("")}</div>`
-    : `<p class="empty">No products match. Try fewer words${result.fuzzy ? "" : " or turn on typo tolerance"}.</p>`;
+    : `<p class="empty">No products match. Try fewer words${result.mode === "fulltext" && !result.fuzzy ? " or turn on typo tolerance" : ""}.</p>`;
 }
 
 async function runCompare(query, signal) {
@@ -333,20 +364,52 @@ async function openProduct(id) {
     .filter(Boolean)
     .map((feature) => `<li>${escapeHtml(feature)}</li>`)
     .join("");
-  els.similar.innerHTML = '<p class="muted">Finding similar products…</p>';
-  els.similarSql.textContent = "";
   if (!els.dialog.open) els.dialog.showModal();
   els.dialog.scrollTop = 0;
 
   similarController?.abort();
   similarController = new AbortController();
+  const path = `/api/similar/${encodeURIComponent(id)}`;
+  loadSimilar(path, els.similar, els.similarSql, similarController.signal);
+  loadSimilar(`${path}?by=photo`, els.similarPhoto, els.similarPhotoSql, similarController.signal);
+}
+
+async function loadSimilar(path, grid, sql, signal) {
+  grid.innerHTML = '<p class="muted">Finding similar products…</p>';
+  sql.textContent = "";
   try {
-    const result = await api(`/api/similar/${encodeURIComponent(id)}`, {}, similarController.signal);
-    els.similar.innerHTML = `<div class="grid">${result.hits.map((similar, index) => productCard(similar, index + 1, [], "similar")).join("")}</div>`;
-    els.similarSql.innerHTML = highlightSql(result.sql);
+    const result = await api(path, {}, signal);
+    grid.innerHTML = result.hits.length
+      ? `<div class="grid">${result.hits.map((similar, index) => productCard(similar, index + 1, [], "similar")).join("")}</div>`
+      : '<p class="muted">No similar products found.</p>';
+    sql.innerHTML = highlightSql(result.sql);
   } catch (error) {
-    if (error.name !== "AbortError") els.similar.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+    if (error.name !== "AbortError") grid.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function setPhoto(file) {
+  if (!file.type.startsWith("image/") || file.size > MAX_PHOTO_BYTES) {
+    els.status.innerHTML = '<span class="error">Choose an image file up to 5 MB.</span>';
+    return;
+  }
+  clearPhoto();
+  state.photo = file;
+  els.photoImage.src = URL.createObjectURL(file);
+  els.photoPreview.hidden = false;
+  if (state.mode === "image") submit();
+  else setMode("image");
+  els.query.value = "";
+  els.query.placeholder = "Type to search by words instead";
+}
+
+function clearPhoto() {
+  if (!state.photo) return;
+  URL.revokeObjectURL(els.photoImage.src);
+  state.photo = null;
+  els.photoPreview.hidden = true;
+  els.photoInput.value = "";
+  els.query.placeholder = "Search products";
 }
 
 async function randomQuestion() {
@@ -364,6 +427,7 @@ function renderExamples() {
 function setMode(mode) {
   // Search types share a query so their results can be compared; a question for the AI reads differently.
   const switchesKind = (mode === "chat") !== (state.mode === "chat");
+  if (mode !== "image") clearPhoto();
   state.mode = mode;
   document.body.dataset.mode = mode;
   els.tabs.forEach((tab) => {
@@ -371,14 +435,15 @@ function setMode(mode) {
     tab.setAttribute("aria-selected", String(selected));
     tab.tabIndex = selected ? 0 : -1;
   });
-  els.fuzzy.disabled = mode === "vector";
+  els.fuzzy.disabled = mode === "vector" || mode === "image";
   els.submit.textContent = mode === "chat" ? "Ask" : "Search";
   els.query.placeholder = mode === "chat" ? "Ask a shopping question" : "Search products";
   if (mode === "chat") els.query.removeAttribute("list");
   else els.query.setAttribute("list", "suggestions");
   els.explain.textContent = MODES[mode].explain;
   renderExamples();
-  if (switchesKind) els.query.value = MODES[mode].examples[0];
+  // After a photo search the box is empty, so give the next search type something to run.
+  if (switchesKind || !els.query.value.trim()) els.query.value = MODES[mode].examples[0];
   if (mode === "chat") showChat();
   else submit();
 }
@@ -419,7 +484,43 @@ els.examples.addEventListener("click", async (event) => {
   submit();
 });
 
+els.photoInput.addEventListener("change", () => {
+  if (els.photoInput.files[0]) setPhoto(els.photoInput.files[0]);
+});
+
+els.photoClear.addEventListener("click", () => {
+  clearPhoto();
+  els.query.value = MODES.image.examples[0];
+  submit();
+});
+
+window.addEventListener("dragover", (event) => {
+  if (!event.dataTransfer.types.includes("Files")) return;
+  event.preventDefault();
+  document.body.classList.add("is-dragging");
+});
+
+window.addEventListener("dragleave", (event) => {
+  if (!event.relatedTarget) document.body.classList.remove("is-dragging");
+});
+
+window.addEventListener("drop", (event) => {
+  document.body.classList.remove("is-dragging");
+  const file = event.dataTransfer.files[0];
+  if (!file) return;
+  event.preventDefault();
+  setPhoto(file);
+});
+
+document.addEventListener("paste", (event) => {
+  const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith("image/"));
+  if (!file) return;
+  event.preventDefault();
+  setPhoto(file);
+});
+
 els.query.addEventListener("input", () => {
+  clearPhoto();
   clearTimeout(suggestTimer);
   if (state.mode === "chat") return;
   if (!els.query.value.trim()) {

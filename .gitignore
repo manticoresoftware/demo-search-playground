@@ -6,3 +6,5 @@ __pycache__/
 .idea/
 data/raw/
 dumps/convapparel_products.sql.gz
+dumps/image_vectors.progress.jsonl
+dumps/convapparel_image_vectors.sql

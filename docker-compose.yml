@@ -8,6 +8,11 @@ services:
     volumes:
       - manticore_data:/var/lib/manticore
 
+  embed:
+    build: ./embed
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+
   app:
     build: .
     ports:
@@ -17,3 +22,4 @@ services:
 
 volumes:
   manticore_data:
+  huggingface_cache:

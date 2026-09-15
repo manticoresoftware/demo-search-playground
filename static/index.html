@@ -32,6 +32,7 @@
           <button type="button" role="tab" data-tab="fulltext" aria-controls="results">Full-text</button>
           <button type="button" role="tab" data-tab="vector" aria-controls="results">Vector</button>
           <button type="button" role="tab" data-tab="hybrid" aria-controls="results">Hybrid</button>
+          <button type="button" role="tab" data-tab="image" aria-controls="results">Image</button>
           <button type="button" role="tab" data-tab="compare" aria-controls="results">Compare all three</button>
           <button type="button" role="tab" data-tab="chat" aria-controls="results">Ask AI</button>
         </div>
@@ -42,6 +43,15 @@
           <datalist id="suggestions"></datalist>
           <button id="submit" class="button" type="submit">Search</button>
         </form>
+
+        <div class="photo">
+          <label class="photo-pick"><input id="photo-input" class="sr-only" type="file" accept="image/*" />Search with a photo</label>
+          <span>or drop or paste one anywhere on the page</span>
+          <figure id="photo-preview" class="photo-preview" hidden>
+            <img id="photo-image" alt="Your photo" />
+            <button type="button" id="photo-clear" aria-label="Remove photo">×</button>
+          </figure>
+        </div>
 
         <div class="filters">
           <label class="toggle"><input id="fuzzy" type="checkbox" checked /> Typo tolerance</label>
@@ -97,9 +107,14 @@
         </div>
       </div>
       <section class="similar" aria-labelledby="similar-title">
-        <h3 id="similar-title">Similar products</h3>
+        <h3 id="similar-title">Similar by description</h3>
         <div id="similar"></div>
         <pre id="similar-sql" class="code code--light"></pre>
+      </section>
+      <section class="similar" aria-labelledby="similar-photo-title">
+        <h3 id="similar-photo-title">Similar by photo</h3>
+        <div id="similar-photo"></div>
+        <pre id="similar-photo-sql" class="code code--light"></pre>
       </section>
     </dialog>
 

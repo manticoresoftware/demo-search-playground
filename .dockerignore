@@ -9,3 +9,5 @@ __pycache__
 data/raw
 dumps/convapparel_products.sql.gz
 dumps/convapparel_products_with_embeddings.sql.*.part-*
+dumps/image_vectors.progress.jsonl
+dumps/convapparel_image_vectors.sql

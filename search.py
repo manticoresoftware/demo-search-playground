@@ -4,11 +4,14 @@ import re
 from typing import Any, Callable
 
 TABLE = "convapparel_products"
+IMAGE_TABLE = "convapparel_product_images"
 CATEGORIES = ("tops", "footwear", "outerwear", "bottoms")
 PRODUCT_COLUMNS = "id, title, description, features, category, image_url"
 KNN_CANDIDATES = 100
 SIMILAR_LIMIT = 8
 AUTOCOMPLETE_LIMIT = 6
+# The SQL shown to people keeps a few of the 512 vector numbers and 100 ids; the executed query has all of them.
+PREVIEW_VALUES = 3
 # Cosine distance never exceeds 2; hybrid rows found only by keywords report FLT_MAX instead.
 MAX_COSINE_DISTANCE = 2.0
 
@@ -59,6 +62,33 @@ def build_similar_sql(product_id: int) -> str:
         f"SELECT {PRODUCT_COLUMNS}, knn_dist() AS distance FROM {TABLE} "
         f"WHERE knn(embedding_vector, {SIMILAR_LIMIT}, {product_id}) LIMIT {SIMILAR_LIMIT}"
     )
+
+
+def sql_list(values: list[Any], preview: bool = False) -> str:
+    shown = values[:PREVIEW_VALUES] if preview else values
+    more = ", …" if preview and len(values) > PREVIEW_VALUES else ""
+    return f"({', '.join(map(str, shown))}{more})"
+
+
+def build_image_knn_sql(vector_sql: str) -> str:
+    return (
+        f"SELECT id, knn_dist() AS distance FROM {IMAGE_TABLE} "
+        f"WHERE knn(image_vector, {KNN_CANDIDATES}, {vector_sql}) LIMIT {KNN_CANDIDATES}"
+    )
+
+
+def build_similar_photo_sql(product_id: int) -> str:
+    return (
+        f"SELECT id, knn_dist() AS distance FROM {IMAGE_TABLE} "
+        f"WHERE knn(image_vector, {SIMILAR_LIMIT}, {product_id}) LIMIT {SIMILAR_LIMIT}"
+    )
+
+
+def build_products_sql(ids_sql: str, category: str | None, quote: Quote) -> str:
+    conditions = [f"id IN {ids_sql}"]
+    if category:
+        conditions.append(f"REGEX(category, {quote(category)})")
+    return f"SELECT {PRODUCT_COLUMNS} FROM {TABLE} WHERE {' AND '.join(conditions)} LIMIT {KNN_CANDIDATES}"
 
 
 def to_hit(row: dict[str, Any]) -> dict[str, Any]:

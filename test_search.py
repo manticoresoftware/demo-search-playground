@@ -1,7 +1,7 @@
 """Run: docker compose run --rm --no-deps app python test_search.py"""
 
 from app import sql_quote
-from search import build_search_sql, category_counts, complete_query, to_hit
+from search import build_image_knn_sql, build_products_sql, build_search_sql, category_counts, complete_query, sql_list, to_hit
 
 # User input never reaches MATCH() as operators, and quotes stay escaped in the KNN text.
 sql = build_search_sql("it's a \"t-shirt\" | -sale", "hybrid", "tops", 5, True, sql_quote)
@@ -27,6 +27,11 @@ keyword_only = to_hit({**row, "text_score": 1500, "distance": 3.4e38})
 assert keyword_only["id"] == str(2**62) and keyword_only["matched_words"] and keyword_only["similarity"] is None
 knn_only = to_hit({**row, "text_score": 1, "distance": 0.25})
 assert not knn_only["matched_words"] and knn_only["similarity"] == 0.75
+
+assert sql_list([1, 2, 3, 4], preview=True) == "(1, 2, 3, …)" and sql_list([1, 2]) == "(1, 2)"
+assert "knn(image_vector, 100, (0.1, 0.2))" in build_image_knn_sql("(0.1, 0.2)")
+sql = build_products_sql("(1, 2)", "tops", sql_quote)
+assert "WHERE id IN (1, 2) AND REGEX(category, 'tops') LIMIT 100" in sql, sql
 
 assert complete_query("waterproof hik", ["hiking", "dashiki", "hik"]) == ["waterproof hiking"]
 assert complete_query("boots ", ["boots"]) == []

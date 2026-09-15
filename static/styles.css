@@ -321,6 +321,75 @@ body[data-mode="chat"] .filters {
   border-style: solid;
 }
 
+.photo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+body:not([data-mode="image"]) .photo {
+  display: none;
+}
+
+.photo-pick {
+  padding: 0.4375rem 0.875rem;
+  font-weight: 500;
+  color: var(--olive-ink);
+  background: #ffffff;
+  border: 1px solid var(--olive);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.photo-pick:hover {
+  background: var(--wash);
+}
+
+.photo-pick:has(input:focus-visible) {
+  outline: 2px solid var(--olive);
+  outline-offset: 2px;
+}
+
+.photo-preview {
+  position: relative;
+  margin: 0;
+}
+
+.photo-preview img {
+  display: block;
+  width: 3.5rem;
+  height: 3.5rem;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.photo-preview button {
+  position: absolute;
+  top: -0.5rem;
+  right: -0.5rem;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1;
+  color: #ffffff;
+  background: var(--ink);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+body.is-dragging .composer {
+  outline: 2px dashed var(--olive);
+  outline-offset: 0.5rem;
+  border-radius: 12px;
+}
+
 /* Results and inspector */
 
 .workspace {
