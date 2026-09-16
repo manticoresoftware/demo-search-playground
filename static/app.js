@@ -6,6 +6,7 @@ const GEO_CENTER = { lat: 40.7128, lon: -74.006 };
 const DEFAULT_RADIUS_KM = 10;
 const LEAFLET_BASE = "https://unpkg.com/leaflet@1.9.4/dist";
 const AUTOCOMPLETE_DELAY_MS = 150;
+const LIVE_SEARCH_DELAY_MS = 300;
 // Matches MAX_PHOTO_BYTES in app.py.
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const COPIED_MS = 1500;
@@ -70,6 +71,7 @@ const els = {
   submit: $("submit"),
   suggestions: $("suggestions"),
   fuzzy: $("fuzzy"),
+  live: $("live"),
   categories: $("categories"),
   examples: $("examples"),
   results: $("results"),
@@ -124,6 +126,7 @@ let searchController = null;
 let suggestController = null;
 let similarController = null;
 let suggestTimer = null;
+let liveTimer = null;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -619,6 +622,7 @@ function setMode(mode) {
     tab.tabIndex = selected ? 0 : -1;
   });
   els.fuzzy.disabled = mode === "vector" || mode === "image" || mode === "geo";
+  els.live.disabled = mode === "chat" || mode === "image" || mode === "geo";
   els.submit.textContent = mode === "chat" ? "Ask AI" : "Search";
   els.query.placeholder = PLACEHOLDERS[mode] || "Search products";
   if (mode === "chat" || mode === "geo") els.query.removeAttribute("list");
@@ -728,11 +732,14 @@ document.addEventListener("paste", (event) => {
 els.query.addEventListener("input", () => {
   clearPhoto();
   clearTimeout(suggestTimer);
+  clearTimeout(liveTimer);
   if (state.mode === "chat") return;
   if (!els.query.value.trim()) {
     els.suggestions.innerHTML = "";
     return;
   }
+  // Chat answers cost seconds and a photo search ignores the words, so only typed searches run live.
+  if (els.live.checked && state.mode !== "image") liveTimer = setTimeout(submit, LIVE_SEARCH_DELAY_MS);
   suggestTimer = setTimeout(async () => {
     suggestController?.abort();
     suggestController = new AbortController();
