@@ -3,6 +3,7 @@ const COMPARE_LIMIT = 8;
 const COMPARED_MODES = ["fulltext", "vector", "hybrid"];
 const GEO_LIMIT = 100;
 const GEO_CENTER = { lat: 40.7128, lon: -74.006 };
+const DEFAULT_RADIUS_KM = 10;
 const LEAFLET_BASE = "https://unpkg.com/leaflet@1.9.4/dist";
 const AUTOCOMPLETE_DELAY_MS = 150;
 // Matches MAX_PHOTO_BYTES in app.py.
@@ -93,6 +94,7 @@ const els = {
   photoClear: $("photo-clear"),
   geoRadius: $("geo-radius"),
   geoRadiusValue: $("geo-radius-value"),
+  geoReset: $("geo-reset"),
 };
 
 const params = new URLSearchParams(location.search);
@@ -106,7 +108,7 @@ const state = {
   geo: {
     lat: Number(params.get("lat")) || GEO_CENTER.lat,
     lon: Number(params.get("lon")) || GEO_CENTER.lon,
-    radius: Math.min(Math.max(Number(params.get("radius")) || 10, 0.5), 25),
+    radius: Math.min(Math.max(Number(params.get("radius")) || DEFAULT_RADIUS_KM, 0.5), 25),
     map: null,
     markers: null,
     pin: null,
@@ -670,6 +672,15 @@ els.geoRadius.addEventListener("input", () => {
 
 els.geoRadius.addEventListener("change", () => {
   if (state.mode === "geo") submit();
+});
+
+els.geoReset.addEventListener("click", () => {
+  state.geo.lat = GEO_CENTER.lat;
+  state.geo.lon = GEO_CENTER.lon;
+  state.geo.radius = DEFAULT_RADIUS_KM;
+  els.geoRadius.value = DEFAULT_RADIUS_KM;
+  els.geoRadiusValue.textContent = `${DEFAULT_RADIUS_KM} km`;
+  submit();
 });
 
 els.examples.addEventListener("click", async (event) => {

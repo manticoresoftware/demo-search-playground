@@ -70,8 +70,8 @@
         </figure>
 
         <div id="geo-controls" class="geo-controls">
-          <label class="geo-radius">Radius <input id="geo-radius" type="range" min="0.5" max="25" step="0.5" value="10" aria-label="Search radius in kilometers" /> <output id="geo-radius-value" for="geo-radius">10 km</output></label>
-          <p class="geo-hint">Products wait for pickup around New York. Click the map or drag the pin to set your location, click a product bubble to open it, slide to widen the circle.</p>
+          <div class="geo-radius"><label for="geo-radius">Radius</label> <input id="geo-radius" type="range" min="0.5" max="25" step="0.5" value="10" aria-label="Search radius in kilometers" /> <output id="geo-radius-value" for="geo-radius">10 km</output> <button type="button" id="geo-reset" class="link-button">Reset pin</button></div>
+          <p class="geo-hint">Products wait for pickup around New York. Click the map or drag the pin to set your location, click a product bubble to open it, slide to widen the circle, reset the pin to go back to the centre.</p>
         </div>
 
         <div class="controls">
@@ -137,6 +137,6 @@
       </section>
     </dialog>
 
-    <script src="/static/app.js?v=20260916g"></script>
+    <script src="/static/app.js?v=20260916h"></script>
   </body>
 </html>
