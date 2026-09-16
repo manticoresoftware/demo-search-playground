@@ -21,7 +21,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260915b" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260916g" />
   </head>
   <body>
     <header class="topbar">
@@ -34,6 +34,7 @@
         <button type="button" role="tab" data-tab="vector" aria-controls="results">Vector</button>
         <button type="button" role="tab" data-tab="hybrid" aria-controls="results">Hybrid</button>
         <button type="button" role="tab" data-tab="image" aria-controls="results">Image</button>
+        <button type="button" role="tab" data-tab="geo" aria-controls="results">Geo</button>
         <button type="button" role="tab" data-tab="compare" aria-controls="results">Compare</button>
         <button type="button" role="tab" data-tab="chat" aria-controls="results">Ask AI</button>
       </div>
@@ -68,15 +69,19 @@
           <button type="button" id="photo-clear" class="link-button">Remove</button>
         </figure>
 
+        <div id="geo-controls" class="geo-controls">
+          <label class="geo-radius">Radius <input id="geo-radius" type="range" min="0.5" max="25" step="0.5" value="10" aria-label="Search radius in kilometers" /> <output id="geo-radius-value" for="geo-radius">10 km</output></label>
+          <p class="geo-hint">Products wait for pickup around New York. Click the map or drag the pin to set your location, click a product bubble to open it, slide to widen the circle.</p>
+        </div>
+
         <div class="controls">
           <label class="toggle"><input id="fuzzy" type="checkbox" checked /> Typo tolerance</label>
           <fieldset id="categories" class="categories">
-            <legend class="sr-only">Category</legend>
-            <label><input type="radio" name="category" value="" checked /><span>All</span></label>
-            <label><input type="radio" name="category" value="tops" /><span>Tops <em data-count="tops"></em></span></label>
-            <label><input type="radio" name="category" value="bottoms" /><span>Bottoms <em data-count="bottoms"></em></span></label>
-            <label><input type="radio" name="category" value="footwear" /><span>Footwear <em data-count="footwear"></em></span></label>
-            <label><input type="radio" name="category" value="outerwear" /><span>Outerwear <em data-count="outerwear"></em></span></label>
+            <legend class="sr-only">Categories</legend>
+            <label><input type="checkbox" name="category" value="tops" /><span>Tops <em data-count="tops"></em></span></label>
+            <label><input type="checkbox" name="category" value="bottoms" /><span>Bottoms <em data-count="bottoms"></em></span></label>
+            <label><input type="checkbox" name="category" value="footwear" /><span>Footwear <em data-count="footwear"></em></span></label>
+            <label><input type="checkbox" name="category" value="outerwear" /><span>Outerwear <em data-count="outerwear"></em></span></label>
           </fieldset>
           <div id="examples" class="examples"></div>
         </div>
@@ -132,6 +137,6 @@
       </section>
     </dialog>
 
-    <script src="/static/app.js?v=20260915b"></script>
+    <script src="/static/app.js?v=20260916g"></script>
   </body>
 </html>

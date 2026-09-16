@@ -18,8 +18,14 @@ from fastapi.staticfiles import StaticFiles
 
 from conversational_search import create_chat_handler, is_uninitialized_error
 from search import (
+    CATEGORIES,
+    GEO_LAT,
+    GEO_LON,
+    GEO_RADIUS_KM,
+    GEO_RADIUS_MAX_KM,
     SIMILAR_LIMIT,
     build_autocomplete_sql,
+    build_geo_sql,
     build_image_knn_sql,
     build_products_sql,
     build_search_sql,
@@ -59,11 +65,9 @@ Citation rules:
 SUPPORTED_SORTS = {"relevance", "title"}
 INIT_MESSAGE = "Manticore is not initialized. Run ./scripts/init_manticore.sh, then reload the app."
 MAX_QUERY_LENGTH = 200
-MAX_RESULTS = 24
+MAX_RESULTS = 100
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 EMBED_UNAVAILABLE = "The image embedding service is not running. Start it with: docker compose up -d embed"
-
-Category = Literal["tops", "footwear", "outerwear", "bottoms"]
 
 app = FastAPI(title="Manticore Search Playground", version="0.2.0")
 # manticoresearch.com, its Cloudflare Pages previews and its local Hugo server call the APIs directly from the browser.
@@ -190,22 +194,49 @@ def index() -> FileResponse:
 
 @app.get("/api/search")
 def search(
-    q: str = Query(min_length=1, max_length=MAX_QUERY_LENGTH),
-    mode: Literal["fulltext", "vector", "hybrid", "image"] = "hybrid",
-    category: Optional[Category] = None,
+    q: str = Query("", max_length=MAX_QUERY_LENGTH),
+    mode: Literal["fulltext", "vector", "hybrid", "image", "geo"] = "hybrid",
+    category: Optional[str] = None,
     fuzzy: bool = True,
+    lat: float = Query(GEO_LAT, ge=-90, le=90),
+    lon: float = Query(GEO_LON, ge=-180, le=180),
+    radius: float = Query(GEO_RADIUS_KM, ge=0.5, le=GEO_RADIUS_MAX_KM),
     limit: int = Query(12, ge=1, le=MAX_RESULTS),
 ) -> dict[str, Any]:
     query = q.strip()
     words = query_words(query)
-    if not words:
+    if not words and mode != "geo":
         raise HTTPException(status_code=400, detail="q must contain at least one word")
+    selected = category_filter(category)
+    if mode == "geo":
+        sql = build_geo_sql(lat, lon, radius, selected, limit, sql_quote)
+        started = time.perf_counter()
+        (hits, *facets), _ = timed_sql(sql)
+        took_ms = elapsed_ms(started)
+        facet_rows = facets[0]["data"] if facets else None
+        return {
+            "query": query,
+            "mode": mode,
+            "category": category,
+            "fuzzy": False,
+            "sql": sql,
+            "took_ms": took_ms,
+            # Facet counts rows inside the same radius, so the total tracks the radius instead of LIMIT.
+            "total": sum(row["count(*)"] for row in facet_rows) if facet_rows is not None else None,
+            "corrected": None,
+            "terms": [],
+            "facets": None,
+            "hits": [
+                {**to_hit(row), "lat": row["lat"], "lon": row["lon"], "distance_km": round(row["distance_km"], 2)}
+                for row in hits["data"]
+            ],
+        }
     if mode == "image":
         started = time.perf_counter()
         vector = embed("/text", {"text": query})
-        return search_by_vector(query, vector, elapsed_ms(started), category, limit)
+        return search_by_vector(query, vector, elapsed_ms(started), selected, limit)
 
-    sql = build_search_sql(query, mode, category, limit, fuzzy, sql_quote)
+    sql = build_search_sql(query, mode, selected, limit, fuzzy, sql_quote)
     (hits, *facets), took_ms = timed_sql(sql)
     facet_rows = facets[0]["data"] if facets else None
     terms = [] if mode == "vector" else words
@@ -227,10 +258,21 @@ def search(
     }
 
 
+def category_filter(category: str | None) -> str | None:
+    """Comma-separated category names become one REGEX alternation the SQL builders quote."""
+    if not category:
+        return None
+    names = category.split(",")
+    unknown = [name for name in names if name not in CATEGORIES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown categories: {', '.join(unknown)}")
+    return "|".join(names)
+
+
 @app.post("/api/search/image")
 async def search_photo(
     request: Request,
-    category: Optional[Category] = None,
+    category: Optional[str] = None,
     limit: int = Query(12, ge=1, le=MAX_RESULTS),
 ) -> dict[str, Any]:
     if not request.headers.get("content-type", "").startswith("image/"):

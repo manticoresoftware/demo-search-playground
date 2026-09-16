@@ -7,6 +7,11 @@ TABLE = "convapparel_products"
 IMAGE_TABLE = "convapparel_product_images"
 CATEGORIES = ("tops", "footwear", "outerwear", "bottoms")
 PRODUCT_COLUMNS = "id, title, description, features, category, image_url"
+GEO_COLUMNS = f"{PRODUCT_COLUMNS}, lat, lon"
+# Geo search pins the shopper in New York; the dump scatters products roughly +/-150 km around it.
+GEO_LAT, GEO_LON = 40.7128, -74.0060
+GEO_RADIUS_KM = 10.0
+GEO_RADIUS_MAX_KM = 25.0
 KNN_CANDIDATES = 100
 SIMILAR_LIMIT = 8
 AUTOCOMPLETE_LIMIT = 6
@@ -47,6 +52,22 @@ def build_search_sql(query: str, mode: str, category: str | None, limit: int, fu
         # KNN candidates make facet counts meaningless, and hybrid search rejects FACET outright.
         sql += " FACET category ORDER BY COUNT(*) DESC"
     return sql
+
+
+def build_geo_sql(lat: float, lon: float, radius_km: float, category: str | None, limit: int, quote: Quote) -> str:
+    geodist = f"GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}})"
+    conditions = [f"distance_km <= {radius_km:g}"]
+    if category:
+        conditions.append(f"REGEX(category, {quote(category)})")
+    # The facet sums to the row count inside the same radius filter; Manticore rejects inline GEODIST in a COUNT query.
+    # Order by id, not distance: coordinates are a hash of id, so id order is a deterministic sample that
+    # spreads across the whole circle. Nearest-first would pack every result into the inner core,
+    # making the map blob and the list look identical at every radius. The client sorts by distance.
+    return (
+        f"SELECT {GEO_COLUMNS}, {geodist} AS distance_km FROM {TABLE} "
+        f"WHERE {' AND '.join(conditions)} ORDER BY id ASC LIMIT {limit}"
+        " FACET category ORDER BY COUNT(*) DESC"
+    )
 
 
 def build_suggest_sql(word: str, quote: Quote) -> str:

@@ -77,10 +77,9 @@ The key is passed into the `manticore` service and used when the app creates Man
 Every search endpoint returns the SQL it ran, so the playground and the website can show it next to the results.
 
 - `GET /api/search`
-  - Query: `q` (required, up to 200 characters), `mode` (`fulltext`, `vector`, `hybrid` or `image`, default `hybrid`), optional `category` (`tops`, `bottoms`, `footwear` or `outerwear`), `fuzzy` (default `true`), `limit` (1 to 24, default 12)
-  - `fulltext` runs `MATCH()` with `OPTION fuzzy=1` and `FACET category`, `vector` runs `knn()` with the query text, `hybrid` runs both with `OPTION fusion_method='rrf'`, and `image` turns the text into a Fashion CLIP vector and searches the product photos.
-  - Response: `sql`, `took_ms` and `hits`. Full-text also returns `total` and `facets`. When typo tolerance changed a word, `corrected` holds the query found with `CALL QSUGGEST`, and `terms` holds the words to highlight. Image search adds `embed_ms`, the time spent turning the query into a vector.
-  - Each hit has `matched_words` and `similarity`, which tell whether keywords, meaning or both found it.
+  - Query: `q` (up to 200 characters), `mode` (`fulltext`, `vector`, `hybrid`, `image` or `geo`, default `hybrid`), optional `category` (comma-separated, e.g. `tops,footwear`), `fuzzy` (default `true`), `limit` (1 to 100, default 12). `geo` mode ignores `q` and takes `lat`, `lon` (default New York) and `radius` in kilometers (0.5 to 25, default 10) instead; it runs `FACET category` over the same filter so `total` shows how many products the radius really matches.
+  - fulltext runs `MATCH()` with `OPTION fuzzy=1` and `FACET category`, `vector` runs `knn()` with the query text, `hybrid` runs both with `OPTION fusion_method='rrf'`, `image` turns the text into a Fashion CLIP vector and searches the product photos, and `geo` filters with `GEODIST()` on the `lat`/`lon` attributes baked into the product dump. Geo orders by `id` — coordinates are a hash of id, so the page shows a deterministic sample spread across the whole circle instead of a cluster of the nearest items; the UI sorts hits by distance for the list.
+  - Response: `sql`, `took_ms` and `hits`. Full-text and geo also return `total`; full-text adds `facets`. When typo tolerance changed a word, `corrected` holds the query found with `CALL QSUGGEST`, and `terms` holds the words to highlight. Image search adds `embed_ms`, the time spent turning the query into a vector; geo hits add `lat`, `lon` and `distance_km`.
 - `POST /api/search/image` searches by photo. Send the photo (up to 5 MB) as the request body with an `image/*` `Content-Type`; `category` and `limit` work as above.
 - `GET /api/autocomplete?q=` completes the last word with `CALL AUTOCOMPLETE`.
 - `GET /api/similar/{id}` returns the products closest to a product, using KNN by document id. Add `?by=photo` to compare product photos instead of descriptions.
@@ -190,6 +189,8 @@ To update, pull the new code and run `docker compose up -d --build`. Run `./scri
 ## Website Integration
 
 The homepage demo in `manticoresoftware/site` reads the API address from the Hugo `playground_api` param, which points to the production playground. To test the site against a local copy, run `HUGOxPARAMSxPLAYGROUND_API=http://127.0.0.1:8000 hugo server`. Hugo fetches the first results at build time, and the browser calls the same endpoints for new queries.
+
+The site's Geo section embeds the playground in a frame with `/?mode=geo&embed=1`, which drops the header, footer and inspector and locks out wheel-zoom so it never hijacks the page's scroll.
 
 ## Local Python Development
 

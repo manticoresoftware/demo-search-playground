@@ -1,7 +1,7 @@
 """Run: docker compose run --rm --no-deps app python test_search.py"""
 
 from app import sql_quote
-from search import build_image_knn_sql, build_products_sql, build_search_sql, category_counts, complete_query, sql_list, to_hit
+from search import build_geo_sql, build_image_knn_sql, build_products_sql, build_search_sql, category_counts, complete_query, sql_list, to_hit
 
 # User input never reaches MATCH() as operators, and quotes stay escaped in the KNN text.
 sql = build_search_sql("it's a \"t-shirt\" | -sale", "hybrid", "tops", 5, True, sql_quote)
@@ -9,6 +9,10 @@ assert "MATCH('it s a t shirt sale')" in sql, sql
 assert "knn(embedding_vector, 100, 'it\\'s a \"t-shirt\" | -sale')" in sql, sql
 assert "REGEX(category, 'tops')" in sql and "OPTION fuzzy=1, fusion_method='rrf'" in sql, sql
 assert "FACET" not in sql, sql
+
+# The frontend sends several checked categories as one comma-separated value.
+sql = build_search_sql("boots", "fulltext", "footwear|outerwear", 3, False, sql_quote)
+assert "REGEX(category, 'footwear|outerwear')" in sql, sql
 
 sql = build_search_sql("boots", "fulltext", None, 3, False, sql_quote)
 assert sql.endswith("LIMIT 3 FACET category ORDER BY COUNT(*) DESC"), sql
@@ -35,5 +39,15 @@ assert "WHERE id IN (1, 2) AND REGEX(category, 'tops') LIMIT 100" in sql, sql
 
 assert complete_query("waterproof hik", ["hiking", "dashiki", "hik"]) == ["waterproof hiking"]
 assert complete_query("boots ", ["boots"]) == []
+
+sql = build_geo_sql(40.7128, -74.006, 10, "footwear", 12, sql_quote)
+assert sql == (
+    "SELECT id, title, description, features, category, image_url, lat, lon, "
+    "GEODIST(40.712800, -74.006000, lat, lon, {in=degrees, out=km}) AS distance_km "
+    "FROM convapparel_products WHERE distance_km <= 10 AND REGEX(category, 'footwear') "
+    "ORDER BY id ASC LIMIT 12 FACET category ORDER BY COUNT(*) DESC"
+), sql
+sql = build_geo_sql(40.7, -74.0, 0.5, None, 24, sql_quote)
+assert "REGEX" not in sql and "distance_km <= 0.5" in sql and sql.endswith("ORDER BY id ASC LIMIT 24 FACET category ORDER BY COUNT(*) DESC"), sql
 
 print("ok")

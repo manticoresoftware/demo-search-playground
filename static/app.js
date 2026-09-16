@@ -1,6 +1,9 @@
 const RESULTS_LIMIT = 12;
 const COMPARE_LIMIT = 8;
 const COMPARED_MODES = ["fulltext", "vector", "hybrid"];
+const GEO_LIMIT = 100;
+const GEO_CENTER = { lat: 40.7128, lon: -74.006 };
+const LEAFLET_BASE = "https://unpkg.com/leaflet@1.9.4/dist";
 const AUTOCOMPLETE_DELAY_MS = 150;
 // Matches MAX_PHOTO_BYTES in app.py.
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
@@ -37,6 +40,12 @@ const MODES = {
     examples: ["red plaid flannel shirt", "white sneakers with a gum sole", "floral summer dress"],
     explain:
       "Fashion CLIP turns your words or photo into a vector in the same space as the product photos. Manticore finds the nearest photo vectors in an HNSW index, then loads those products by id. Upload, drop or paste a photo to search by look.",
+  },
+  geo: {
+    label: "Geo",
+    examples: [],
+    explain:
+      "Every product carries latitude and longitude floats. GEODIST() measures the distance from your pin and filters to the radius you choose — the same query that powers “near me” search. Move the pin, widen the circle, and watch the SQL and results follow.",
   },
   compare: {
     label: "Compare",
@@ -82,16 +91,29 @@ const els = {
   photoPreview: $("photo-preview"),
   photoImage: $("photo-image"),
   photoClear: $("photo-clear"),
+  geoRadius: $("geo-radius"),
+  geoRadiusValue: $("geo-radius-value"),
 };
 
 const params = new URLSearchParams(location.search);
 const state = {
   mode: MODES[params.get("mode")] ? params.get("mode") : "hybrid",
-  category: params.get("category") || "",
+  categories: new Set((params.get("category") || "").split(",").filter(Boolean)),
   fuzzy: params.get("fuzzy") !== "0",
   conversation: null,
   turns: [],
   photo: null,
+  geo: {
+    lat: Number(params.get("lat")) || GEO_CENTER.lat,
+    lon: Number(params.get("lon")) || GEO_CENTER.lon,
+    radius: Math.min(Math.max(Number(params.get("radius")) || 10, 0.5), 25),
+    map: null,
+    markers: null,
+    pin: null,
+    circle: null,
+    // Last pin+radius the map was fitted to; refitting only when it changes preserves the user's zoom.
+    view: null,
+  },
 };
 const products = new Map();
 let countedQuery = null;
@@ -149,16 +171,35 @@ async function api(path, options = {}, signal = undefined) {
   return body;
 }
 
+function categoryParam() {
+  return [...state.categories].join(",");
+}
+
 function searchPath(mode, query, limit) {
   const search = new URLSearchParams({ q: query, mode, limit });
-  if (state.category) search.set("category", state.category);
+  const category = categoryParam();
+  if (category) search.set("category", category);
   if (!state.fuzzy) search.set("fuzzy", "false");
+  return `/api/search?${search}`;
+}
+
+function geoPath(limit) {
+  const search = new URLSearchParams({
+    mode: "geo",
+    lat: state.geo.lat.toFixed(6),
+    lon: state.geo.lon.toFixed(6),
+    radius: state.geo.radius,
+    limit,
+  });
+  const category = categoryParam();
+  if (category) search.set("category", category);
   return `/api/search?${search}`;
 }
 
 function photoPath(limit) {
   const search = new URLSearchParams({ limit });
-  if (state.category) search.set("category", state.category);
+  const category = categoryParam();
+  if (category) search.set("category", category);
   return `/api/search/image?${search}`;
 }
 
@@ -205,15 +246,21 @@ function showInspector(sqls, request) {
 function syncUrl(query) {
   const search = new URLSearchParams({ mode: state.mode });
   if (query) search.set("q", query);
-  if (state.category) search.set("category", state.category);
+  const category = categoryParam();
+  if (category) search.set("category", category);
   if (!state.fuzzy) search.set("fuzzy", "0");
+  if (state.mode === "geo") {
+    search.set("lat", state.geo.lat.toFixed(6));
+    search.set("lon", state.geo.lon.toFixed(6));
+    search.set("radius", state.geo.radius);
+  }
   history.replaceState(null, "", `?${search}`);
 }
 
 function updateCounts(result) {
   // A filtered search only counts its own category, so keep the counts from the unfiltered one.
-  if (state.category && result.query === countedQuery && result.mode === "fulltext") return;
-  const counts = new Map(state.category ? [] : (result.facets || []).map((facet) => [facet.value, facet.count]));
+  if (state.categories.size && result.query === countedQuery && result.mode === "fulltext") return;
+  const counts = new Map(state.categories.size ? [] : (result.facets || []).map((facet) => [facet.value, facet.count]));
   countedQuery = result.query;
   els.categories.querySelectorAll("[data-count]").forEach((el) => {
     el.textContent = counts.has(el.dataset.count) ? counts.get(el.dataset.count).toLocaleString("en") : "";
@@ -223,7 +270,7 @@ function updateCounts(result) {
 async function submit() {
   const query = els.query.value.trim();
   const byPhoto = state.mode === "image" && state.photo;
-  if (!query && !byPhoto) return;
+  if (!query && !byPhoto && state.mode !== "geo") return;
   searchController?.abort();
   const controller = (searchController = new AbortController());
   syncUrl(byPhoto ? "" : query);
@@ -231,12 +278,14 @@ async function submit() {
   try {
     if (state.mode === "chat") await runChat(query, controller.signal);
     else if (state.mode === "compare") await runCompare(query, controller.signal);
+    else if (state.mode === "geo") await runGeo(controller.signal);
     else await runSearch(query, controller.signal);
   } catch (error) {
     if (error.name === "AbortError") return;
     els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
     // Results from the previous search would read as answers to this one.
-    if (state.mode !== "chat") els.output.innerHTML = "";
+    // Results from the previous search would read as answers to this one; the geo map stays.
+    if (state.mode !== "chat" && state.mode !== "geo") els.output.innerHTML = "";
   } finally {
     if (controller === searchController) setBusy(false);
   }
@@ -263,6 +312,126 @@ async function runSearch(query, signal) {
   els.output.innerHTML = result.hits.length
     ? `<div class="grid">${result.hits.map((hit, index) => productCard(hit, index + 1, result.terms, result.mode)).join("")}</div>`
     : `<p class="empty">No products match. Try fewer words${result.mode === "fulltext" && !result.fuzzy ? " or turn on typo tolerance" : ""}.</p>`;
+}
+
+function loadLeaflet() {
+  if (!loadLeaflet.promise) {
+    loadLeaflet.promise = new Promise((resolve, reject) => {
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = `${LEAFLET_BASE}/leaflet.css`;
+      document.head.appendChild(css);
+      const script = document.createElement("script");
+      script.src = `${LEAFLET_BASE}/leaflet.js`;
+      script.onload = () => resolve(window.L);
+      script.onerror = () => reject(new Error("Could not load the map library. Check your connection and reload."));
+      document.head.appendChild(script);
+    });
+  }
+  return loadLeaflet.promise;
+}
+
+async function ensureGeoMap() {
+  const L = await loadLeaflet();
+  // Other modes replace els.output, which detaches the map container. The Leaflet instance survives
+  // but is wired to orphaned DOM: clicks never reach it and its old markers stay, so the pin cannot
+  // move and every marker opens the product it held on the previous render. Rebuild when detached.
+  if (state.geo.map && !state.geo.map.getContainer().isConnected) {
+    state.geo.map.remove();
+    state.geo.map = null;
+    state.geo.view = null;
+  }
+  if (state.geo.map) return L;
+  els.output.innerHTML = `<div class="geo-split">
+    <div id="geo-map" class="geo-map"></div>
+    <div id="geo-list" class="geo-list"></div>
+  </div>`;
+  const { lat, lon, radius } = state.geo;
+  // The sticky topbar covers the map's top edge while the page scrolls, so the zoom control moves to the bottom-right corner.
+  // Wheel zoom stays off until the map is clicked: otherwise the map swallows the page's scroll the moment the cursor crosses it.
+  state.geo.map = L.map("geo-map", { zoomControl: false, scrollWheelZoom: false }).setView([lat, lon], 11);
+  L.control.zoom({ position: "bottomright" }).addTo(state.geo.map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+  }).addTo(state.geo.map);
+  // interactive:false keeps clicks inside the circle reaching the map, so clicking anywhere sets the location.
+  state.geo.circle = L.circle([lat, lon], { radius: radius * 1000, color: "#879e2a", weight: 2, fillColor: "#879e2a", fillOpacity: 0.08, interactive: false }).addTo(state.geo.map);
+  state.geo.markers = L.layerGroup().addTo(state.geo.map);
+  state.geo.pin = L.marker([lat, lon], { draggable: true, title: "Your location" }).addTo(state.geo.map);
+  state.geo.pin.on("dragend", () => setGeoLocation(state.geo.pin.getLatLng()));
+  state.geo.map.on("click", (event) => {
+    state.geo.map.scrollWheelZoom.enable();
+    setGeoLocation(event.latlng);
+  });
+  // Leaving the map hands the wheel back to the page.
+  state.geo.map.on("mouseout", () => state.geo.map.scrollWheelZoom.disable());
+  return L;
+}
+
+function setGeoLocation(latlng) {
+  state.geo.lat = latlng.lat;
+  state.geo.lon = latlng.lng;
+  submit();
+}
+
+function geoItem(hit) {
+  products.set(hit.id, hit);
+  return `<li class="geo-item">
+    <img src="${escapeHtml(thumbnail(hit.image_url, 160))}" alt="" loading="lazy" decoding="async">
+    <div><button type="button" class="card-open" data-product="${escapeHtml(hit.id)}">${escapeHtml(hit.title)}</button>
+    <span class="geo-item-meta">${escapeHtml(hit.category)} · ${hit.distance_km} km away</span></div>
+  </li>`;
+}
+
+async function runGeo(signal) {
+  const L = await ensureGeoMap();
+  const path = geoPath(GEO_LIMIT);
+  const result = await api(path, {}, signal);
+  showInspector([result.sql], `curl ${shellQuote(location.origin + path)}`);
+  updateCounts(result);
+  const list = document.getElementById("geo-list");
+  // The SQL samples by id so pins spread across the whole circle; the list still reads nearest-first.
+  const byDistance = [...result.hits].sort((a, b) => a.distance_km - b.distance_km);
+  list.innerHTML = byDistance.length
+    ? `<ol class="geo-list-items">${byDistance.map(geoItem).join("")}</ol>`
+    : '<p class="empty">No products within the radius. Widen the circle or move the pin.</p>';
+  const { map, markers, circle, pin } = state.geo;
+  circle.setLatLng([state.geo.lat, state.geo.lon]).setRadius(state.geo.radius * 1000);
+  pin.setLatLng([state.geo.lat, state.geo.lon]);
+  markers.clearLayers();
+  result.hits.forEach((hit) => {
+    products.set(hit.id, hit);
+    L.marker([hit.lat, hit.lon], {
+      icon: L.divIcon({
+        className: "geo-marker",
+        html: `<img src="${escapeHtml(thumbnail(hit.image_url, 96))}" alt="${escapeHtml(hit.title)}">`,
+        iconSize: [40, 40],
+        // Without an anchor Leaflet hangs the icon box from its top-left corner, so the disc sits
+        // down-right of its real coordinate and overlaps its neighbours: clicks then land on
+        // whichever box is stacked on top, which is why every pin opened the same product.
+        iconAnchor: [20, 20],
+      }),
+      title: `${hit.title} — ${hit.distance_km} km`,
+      riseOnHover: true,
+    })
+      .on("click", () => openProduct(hit.id))
+      .addTo(markers);
+  });
+  // Fit the circle only when the search itself moved or resized it; refitting on every render would
+  // undo the zoom the user just set with the wheel or the +/- control.
+  const view = `${state.geo.lat.toFixed(5)},${state.geo.lon.toFixed(5)},${state.geo.radius}`;
+  if (state.geo.view !== view) {
+    state.geo.view = view;
+    // The extra top padding keeps the fitted view clear of the sticky topbar on the standalone page.
+    map.fitBounds(circle.getBounds(), {
+      paddingTopLeft: [24, document.body.classList.contains("is-embedded") ? 24 : 80],
+      paddingBottomRight: [24, 24],
+      maxZoom: 14,
+    });
+  }
+  const total = result.total ?? result.hits.length;
+  els.status.innerHTML = `<span>${total.toLocaleString("en")} ${total === 1 ? "product" : "products"} within ${state.geo.radius} km in ${result.took_ms} ms</span>`;
 }
 
 async function runCompare(query, signal) {
@@ -426,14 +595,19 @@ async function randomQuestion() {
 }
 
 function renderExamples() {
+  if (!MODES[state.mode].examples.length) {
+    els.examples.innerHTML = "";
+    return;
+  }
   const buttons = MODES[state.mode].examples.map((example) => `<button type="button" data-example="${escapeHtml(example)}">${escapeHtml(example)}</button>`);
   if (state.mode === "chat") buttons.push('<button type="button" data-random>Random shopper question</button>');
   els.examples.innerHTML = `<span>Try</span>${buttons.join("")}`;
 }
 
 function setMode(mode) {
-  // Search types share a query so their results can be compared; a question for the AI reads differently.
-  const switchesKind = (mode === "chat") !== (state.mode === "chat");
+  // Search types share a query so their results can be compared; a question for the AI and a map pin read differently.
+  const queryless = (kind) => kind === "chat" || kind === "geo";
+  const switchesKind = queryless(mode) !== queryless(state.mode);
   if (mode !== "image") clearPhoto();
   state.mode = mode;
   document.body.dataset.mode = mode;
@@ -442,15 +616,16 @@ function setMode(mode) {
     tab.setAttribute("aria-selected", String(selected));
     tab.tabIndex = selected ? 0 : -1;
   });
-  els.fuzzy.disabled = mode === "vector" || mode === "image";
+  els.fuzzy.disabled = mode === "vector" || mode === "image" || mode === "geo";
   els.submit.textContent = mode === "chat" ? "Ask AI" : "Search";
   els.query.placeholder = PLACEHOLDERS[mode] || "Search products";
-  if (mode === "chat") els.query.removeAttribute("list");
+  if (mode === "chat" || mode === "geo") els.query.removeAttribute("list");
   else els.query.setAttribute("list", "suggestions");
   els.explain.textContent = MODES[mode].explain;
   renderExamples();
   // After a photo search the box is empty, so give the next search type something to run.
-  if (switchesKind || !els.query.value.trim()) els.query.value = MODES[mode].examples[0];
+  const example = MODES[mode].examples[0];
+  if (example && (switchesKind || !els.query.value.trim())) els.query.value = example;
   if (mode === "chat") showChat();
   else submit();
 }
@@ -480,8 +655,21 @@ els.fuzzy.addEventListener("change", () => {
 });
 
 els.categories.addEventListener("change", (event) => {
-  state.category = event.target.value;
+  const input = event.target;
+  if (input.checked) state.categories.add(input.value);
+  else state.categories.delete(input.value);
   submit();
+});
+
+els.geoRadius.addEventListener("input", () => {
+  state.geo.radius = Number(els.geoRadius.value);
+  els.geoRadiusValue.textContent = `${state.geo.radius} km`;
+  // The circle follows the thumb live; the query only reruns on release.
+  if (state.geo.circle) state.geo.circle.setRadius(state.geo.radius * 1000);
+});
+
+els.geoRadius.addEventListener("change", () => {
+  if (state.mode === "geo") submit();
 });
 
 els.examples.addEventListener("click", async (event) => {
@@ -581,8 +769,12 @@ document.addEventListener("click", (event) => {
 });
 
 els.fuzzy.checked = state.fuzzy;
-const categoryInput = els.categories.querySelector(`input[value="${CSS.escape(state.category)}"]`);
-if (categoryInput) categoryInput.checked = true;
-else state.category = "";
-els.query.value = params.get("q") || MODES[state.mode].examples[0];
+els.geoRadius.value = state.geo.radius;
+els.geoRadiusValue.textContent = `${state.geo.radius} km`;
+if (params.get("embed") === "1") document.body.classList.add("is-embedded");
+state.categories.forEach((value) => {
+  const input = els.categories.querySelector(`input[value="${CSS.escape(value)}"]`);
+  if (input) input.checked = true;
+});
+els.query.value = params.get("q") || MODES[state.mode].examples[0] || "";
 setMode(state.mode);
