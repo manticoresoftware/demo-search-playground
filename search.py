@@ -12,6 +12,10 @@ GEO_COLUMNS = f"{PRODUCT_COLUMNS}, lat, lon"
 GEO_LAT, GEO_LON = 40.7128, -74.0060
 GEO_RADIUS_KM = 10.0
 GEO_RADIUS_MAX_KM = 25.0
+# Map dots cover the whole visible map, which reaches past the widest search radius.
+GEO_POINTS_RADIUS_MAX_KM = 100.0
+# Manticore returns at most max_matches (1000 by default) rows.
+GEO_POINTS_MAX = 1000
 KNN_CANDIDATES = 100
 SIMILAR_LIMIT = 8
 AUTOCOMPLETE_LIMIT = 6
@@ -71,6 +75,14 @@ def build_geo_sql(
         f"SELECT {GEO_COLUMNS}, {geodist} AS distance_km FROM {TABLE} "
         f"WHERE {' AND '.join(conditions)} ORDER BY {order} ASC LIMIT {limit}"
         " FACET category ORDER BY COUNT(*) DESC"
+    )
+
+
+def build_geo_points_sql(lat: float, lon: float, radius_km: float, limit: int) -> str:
+    # Id order samples evenly across the circle, as in build_geo_sql.
+    return (
+        f"SELECT lat, lon, GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}}) AS distance_km FROM {TABLE} "
+        f"WHERE distance_km <= {radius_km:g} ORDER BY id ASC LIMIT {limit}"
     )
 
 

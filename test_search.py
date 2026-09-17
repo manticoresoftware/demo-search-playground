@@ -1,7 +1,8 @@
 """Run: docker compose run --rm --no-deps app python test_search.py"""
 
 from app import sql_quote
-from search import build_geo_sql, build_image_knn_sql, build_products_sql, build_search_sql, category_counts, complete_query, sql_list, to_hit
+from conversational_search import history_turns
+from search import build_geo_points_sql, build_geo_sql, build_image_knn_sql, build_products_sql, build_search_sql, category_counts, complete_query, sql_list, to_hit
 
 # User input never reaches MATCH() as operators, and quotes stay escaped in the KNN text.
 sql = build_search_sql("it's a \"t-shirt\" | -sale", "hybrid", "tops", 5, True, sql_quote)
@@ -49,7 +50,22 @@ assert sql == (
 ), sql
 sql = build_geo_sql(40.7, -74.0, 0.5, None, 24, sql_quote)
 assert "REGEX" not in sql and "distance_km <= 0.5" in sql and sql.endswith("ORDER BY id ASC LIMIT 24 FACET category ORDER BY COUNT(*) DESC"), sql
+sql = build_geo_points_sql(40.7, -74.0, 37.5, 600)
+assert sql == (
+    "SELECT lat, lon, GEODIST(40.700000, -74.000000, lat, lon, {in=degrees, out=km}) AS distance_km "
+    "FROM convapparel_products WHERE distance_km <= 37.5 ORDER BY id ASC LIMIT 600"
+), sql
 sql = build_geo_sql(40.7, -74.0, 10, None, 3, sql_quote, nearest=True)
 assert "ORDER BY distance_km ASC LIMIT 3 FACET" in sql, sql
+
+turns = history_turns([
+    {"role": "user", "message": "comfy sneakers", "search_query": "comfortable sneakers"},
+    {"role": "assistant", "message": "Try these [ref:22]. Or [ref:11], like [ref:22].", "search_query": ""},
+    {"role": "user", "message": "in white?", "search_query": "white comfortable sneakers"},
+])
+assert turns == [
+    {"message": "comfy sneakers", "search_query": "comfortable sneakers", "response": "Try these [ref:22]. Or [ref:11], like [ref:22].", "source_ids": [22, 11]},
+    {"message": "in white?", "search_query": "white comfortable sneakers", "response": "", "source_ids": []},
+], turns
 
 print("ok")

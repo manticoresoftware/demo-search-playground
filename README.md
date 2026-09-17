@@ -80,16 +80,18 @@ Every search endpoint returns the SQL it ran, so the playground and the website 
   - Query: `q` (up to 200 characters), `mode` (`fulltext`, `vector`, `hybrid`, `image` or `geo`, default `hybrid`), optional `category` (comma-separated, e.g. `tops,footwear`), `fuzzy` (default `true`), `limit` (1 to 100, default 12). `geo` mode ignores `q` and takes `lat`, `lon` (default New York) and `radius` in kilometers (0.5 to 25, default 10) instead; it runs `FACET category` over the same filter so `total` shows how many products the radius really matches.
   - fulltext runs `MATCH()` with `OPTION fuzzy=1` and `FACET category`, `vector` runs `knn()` with the query text, `hybrid` runs both with `OPTION fusion_method='rrf'`, `image` turns the text into a Fashion CLIP vector and searches the product photos, and `geo` filters with `GEODIST()` on the `lat`/`lon` attributes baked into the product dump. Geo orders by `id` — coordinates are a hash of id, so the page shows a deterministic sample spread across the whole circle instead of a cluster of the nearest items; the UI sorts hits by distance for the list. `nearest=1` orders by distance instead, for short lists without a map.
   - Response: `sql`, `took_ms` and `hits`. Full-text and geo also return `total`; full-text adds `facets`. When typo tolerance changed a word, `corrected` holds the query found with `CALL QSUGGEST`, and `terms` holds the words to highlight. Image search adds `embed_ms`, the time spent turning the query into a vector; geo hits add `lat`, `lon` and `distance_km`.
+- `GET /api/geo/points?lat=&lon=&radius=&limit=` returns only the coordinates of products within `radius` km (up to 100) as `points` (`[[lat, lon], …]`, up to 1,000, sampled in id order), for drawing products as map dots.
 - `POST /api/search/image` searches by photo. Send the photo (up to 5 MB) as the request body with an `image/*` `Content-Type`; `category` and `limit` work as above.
 - `GET /api/autocomplete?q=` completes the last word with `CALL AUTOCOMPLETE`.
 - `GET /api/similar/{id}` returns the products closest to a product, using KNN by document id. Add `?by=photo` to compare product photos instead of descriptions.
 - `POST /api/assistant/chat`
   - Body: `message`, optional `conversation_uuid`, optional `custom_prompt`
   - Response includes Manticore `response_with_refs` when available, plus `sources`; the UI turns `[ref:<id>]` markers into numbered links to the source products.
+- `POST /api/assistant/conversations/{conversation_uuid}/copy` copies a conversation under a new id and returns `conversation_uuid` and its `turns` (`message`, `search_query`, `response`, `sources`). Body: optional `sources`, the product ids shown with the last answer; otherwise each turn gets the products its answer cites. `CALL CHAT` has no command to read or copy history, so this reads and writes Buddy's `system.chat_history_shopping_assistant` table directly.
 
 When `custom_prompt` is omitted or blank, the app creates/reuses the default `shopping_assistant` chat model with the built-in prompt. When `custom_prompt` is non-empty, the app calculates a SHA-256 hash prefix for that prompt, creates/reuses `shopping_assistant_<hash>`, and calls that model so repeated prompt variants do not recreate duplicate chat models.
 
-Opening `/?mode=chat&q=<question>&ask=1` asks the question right away in a new conversation, so the visitor can continue with follow-ups. manticoresearch.com links its Ask AI answer here.
+manticoresearch.com links its Ask AI answer to `/?mode=chat&conversation=<uuid>&sources=<ids>`. Every homepage visitor is shown the same answer, so the playground continues a copy of that conversation; follow-ups keep its context without reaching other visitors.
 
 Examples:
 

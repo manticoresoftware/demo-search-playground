@@ -67,6 +67,9 @@ const $ = (id) => document.getElementById(id);
 const els = {
   tabs: Array.from(document.querySelectorAll('.modes [role="tab"]')),
   form: $("search-form"),
+  intro: document.querySelector(".intro"),
+  queryBox: $("query-box"),
+  chatNote: $("chat-note"),
   query: $("query"),
   submit: $("submit"),
   suggestions: $("suggestions"),
@@ -504,8 +507,23 @@ function turnHtml({ message, result }) {
 
 function renderChat() {
   els.output.innerHTML = state.turns.length
-    ? `${state.turns.map(turnHtml).join("")}<button type="button" class="link-button" data-new-chat>Start a new conversation</button>`
+    ? state.turns.map(turnHtml).join("")
     : '<p class="empty">Ask a shopping question. Manticore finds matching products, and the AI answers using only those products.</p>';
+  placeQueryBox();
+}
+
+// Once a conversation exists, the question box moves under its latest answer so it reads as a reply, not a new search.
+function placeQueryBox() {
+  const threaded = state.mode === "chat" && state.turns.length > 0;
+  els.chatNote.hidden = !threaded;
+  // An example would drop an unrelated question into the conversation.
+  els.examples.hidden = threaded;
+  if (threaded === (els.queryBox.parentElement === els.results)) return;
+  // Moving the box takes focus out of the input.
+  const focused = els.queryBox.contains(document.activeElement);
+  if (threaded) els.results.append(els.queryBox);
+  else els.intro.after(els.queryBox);
+  if (focused) els.query.focus({ preventScroll: true });
 }
 
 function showChat() {
@@ -531,6 +549,36 @@ async function runChat(message, signal) {
   els.query.value = "";
   els.query.placeholder = "Ask a follow-up question";
   els.output.querySelector(".turn:last-of-type").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+// Every homepage visitor sees the same answer, so it continues as a copy of its own.
+async function continueConversation(conversation, sources) {
+  searchController?.abort();
+  const controller = (searchController = new AbortController());
+  setBusy(true);
+  // The box and the URL still hold the chat tab's example question.
+  els.query.value = "";
+  syncUrl("");
+  els.status.innerHTML = "<span>Opening the conversation…</span>";
+  try {
+    const copy = await api(
+      `/api/assistant/conversations/${encodeURIComponent(conversation)}/copy`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sources: sources ? sources.split(",") : null }) },
+      controller.signal,
+    );
+    const last = copy.turns[copy.turns.length - 1];
+    showInspector([chatSql(last.message)], chatRequest(last.message));
+    state.conversation = copy.conversation_uuid;
+    state.turns = copy.turns.map((turn) => ({ message: turn.message, result: turn }));
+    els.status.innerHTML = "<span>Continuing your conversation from manticoresearch.com</span>";
+    renderChat();
+    els.query.placeholder = "Ask a follow-up question";
+    els.query.focus({ preventScroll: true });
+  } catch (error) {
+    if (error.name !== "AbortError") els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+  } finally {
+    if (controller === searchController) setBusy(false);
+  }
 }
 
 async function openProduct(id) {
@@ -646,6 +694,7 @@ function setMode(mode) {
   els.query.placeholder = PLACEHOLDERS[mode] || "Search products";
   els.explain.textContent = MODES[mode].explain;
   renderExamples();
+  placeQueryBox();
   // After a photo search the box is empty, so give the next search type something to run.
   const example = MODES[mode].examples[0];
   if (example && (switchesKind || !els.query.value.trim())) els.query.value = example;
@@ -850,8 +899,5 @@ state.categories.forEach((value) => {
 });
 els.query.value = params.get("q") || MODES[state.mode].examples[0] || "";
 setMode(state.mode);
-// manticoresearch.com's "Ask a follow-up" link lands here with the question it answered. Its answer is shared by every
-// homepage visitor, so the question is asked again to start a conversation of the visitor's own.
-if (state.mode === "chat" && params.get("ask") === "1" && els.query.value.trim()) {
-  submit().then(() => els.query.focus({ preventScroll: true }));
-}
+// manticoresearch.com's "Ask a follow-up" link lands here with the conversation it showed.
+if (state.mode === "chat" && params.get("conversation")) continueConversation(params.get("conversation"), params.get("sources"));

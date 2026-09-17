@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -15,16 +16,20 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from conversational_search import create_chat_handler, is_uninitialized_error
+from conversational_search import create_chat_handler, history_turns, is_uninitialized_error
 from search import (
     CATEGORIES,
     GEO_LAT,
     GEO_LON,
+    GEO_POINTS_MAX,
+    GEO_POINTS_RADIUS_MAX_KM,
     GEO_RADIUS_KM,
     GEO_RADIUS_MAX_KM,
     SIMILAR_LIMIT,
     build_autocomplete_sql,
+    build_geo_points_sql,
     build_geo_sql,
     build_image_knn_sql,
     build_products_sql,
@@ -61,6 +66,14 @@ Citation rules:
 - Cite a product right where you describe it: put its reference `[ref:<id>]`, using the context ID (`context[].id`), at the end of that sentence or list item.
 - Each sentence or list item carries only the references of the products it describes.
 - Never collect references at the end of the answer."""
+# CALL CHAT keeps each conversation's messages in this Buddy table; it has no SQL command to read or copy them.
+CHAT_HISTORY_TABLE = f"system.chat_history_{CHAT_DEFAULT_MODEL}"
+CHAT_HISTORY_COLUMNS = (
+    "conversation_uuid, model_name, created_at, role, message, tokens_used, intent, search_query, exclude_query, excluded_ids, ttl"
+)
+# Buddy reads at most this many messages of a conversation.
+CHAT_HISTORY_LIMIT = 100
+UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 SUPPORTED_SORTS = {"relevance", "title"}
 INIT_MESSAGE = "Manticore is not initialized. Run ./scripts/init_manticore.sh, then reload the app."
 MAX_QUERY_LENGTH = 200
@@ -269,6 +282,19 @@ def category_filter(category: str | None) -> str | None:
     return "|".join(names)
 
 
+@app.get("/api/geo/points")
+def geo_points(
+    lat: float = Query(GEO_LAT, ge=-90, le=90),
+    lon: float = Query(GEO_LON, ge=-180, le=180),
+    radius: float = Query(ge=0.5, le=GEO_POINTS_RADIUS_MAX_KM),
+    limit: int = Query(ge=1, le=GEO_POINTS_MAX),
+) -> dict[str, Any]:
+    """Only coordinates, so a map can draw hundreds of products as dots without loading their details."""
+    sql = build_geo_points_sql(lat, lon, radius, limit)
+    (rows,), took_ms = timed_sql(sql)
+    return {"sql": sql, "took_ms": took_ms, "points": [[row["lat"], row["lon"]] for row in rows["data"]]}
+
+
 @app.post("/api/search/image")
 async def search_photo(
     request: Request,
@@ -298,6 +324,57 @@ def autocomplete(q: str = Query(min_length=1, max_length=MAX_QUERY_LENGTH)) -> d
     sql = build_autocomplete_sql(last_word.group().lower(), sql_quote)
     rows = run_sql(sql)[0]["data"]
     return {"sql": sql, "suggestions": complete_query(q, [row["query"] for row in rows])}
+
+
+class CopyConversationRequest(BaseModel):
+    # The products the page showed with the last answer, in its numbering; otherwise the cited ones.
+    sources: Optional[list[int]] = None
+
+
+@app.post("/api/assistant/conversations/{conversation_uuid}/copy")
+def copy_conversation(
+    conversation_uuid: str = PathParam(pattern=UUID_PATTERN), req: Optional[CopyConversationRequest] = None
+) -> dict[str, Any]:
+    """Copies a conversation under a new id, so a visitor can continue an answer that other visitors were shown
+    too without their follow-ups reaching each other. Returns the new id and the turns to show."""
+    rows = run_sql(
+        f"SELECT {CHAT_HISTORY_COLUMNS} FROM {CHAT_HISTORY_TABLE} WHERE conversation_uuid = {sql_quote(conversation_uuid)} "
+        f"ORDER BY created_at ASC, id ASC LIMIT {CHAT_HISTORY_LIMIT}"
+    )[0]["data"]
+    turns = history_turns(rows)
+    if not turns:
+        raise HTTPException(status_code=404, detail="This conversation is no longer available. Ask your question again.")
+
+    copy_uuid = str(uuid.uuid4())
+    values = ", ".join(
+        "(" + ", ".join(
+            sql_quote(copy_uuid) if column == "conversation_uuid" else str(row[column]) if isinstance(row[column], int) else sql_quote(row[column])
+            for column in CHAT_HISTORY_COLUMNS.split(", ")
+        ) + ")"
+        for row in rows
+    )
+    run_sql(f"INSERT INTO {CHAT_HISTORY_TABLE} ({CHAT_HISTORY_COLUMNS}) VALUES {values}")
+
+    if req and req.sources:
+        turns[-1]["source_ids"] = req.sources
+    ids = list({product_id for turn in turns for product_id in turn["source_ids"]})
+    products = {}
+    if ids:
+        (found,) = run_sql(build_products_sql(sql_list(ids), None, sql_quote))
+        products = {row["id"]: to_hit(row) for row in found["data"]}
+    return {
+        "conversation_uuid": copy_uuid,
+        "turns": [
+            {
+                "message": turn["message"],
+                "search_query": turn["search_query"],
+                "response": turn["response"],
+                # Answers can cite ids that are not products, and callers send ids of their own.
+                "sources": [products[product_id] for product_id in turn["source_ids"] if product_id in products],
+            }
+            for turn in turns
+        ],
+    }
 
 
 @app.get("/api/similar/{product_id}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
@@ -215,6 +216,18 @@ def create_chat_handler(
         }
 
     return assistant_chat
+
+
+def history_turns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pairs stored chat history rows into turns; source_ids are the products the answer cites, in citation order."""
+    turns: list[dict[str, Any]] = []
+    for row in rows:
+        if row["role"] == "user":
+            turns.append({"message": row["message"], "search_query": row["search_query"], "response": "", "source_ids": []})
+        elif row["role"] == "assistant" and turns:
+            turns[-1]["response"] = row["message"]
+            turns[-1]["source_ids"] = list(dict.fromkeys(int(ref) for ref in re.findall(r"\[ref:(\d+)\]", row["message"])))
+    return turns
 
 
 def is_uninitialized_error(error_text: str) -> bool:

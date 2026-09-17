@@ -21,7 +21,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260917a" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260917b" />
   </head>
   <body>
     <header class="topbar">
@@ -51,6 +51,7 @@
           <p>Every result shows the SQL Manticore ran to find it.</p>
         </div>
 
+        <div id="query-box" class="query-box">
         <form id="search-form" class="search" role="search">
           <label class="sr-only" for="query">Search query</label>
           <div class="search-field">
@@ -64,6 +65,8 @@
           </label>
           <button id="submit" class="button" type="submit">Search</button>
         </form>
+        <p id="chat-note" class="chat-note" hidden>Follow-up questions continue this conversation. <button type="button" class="link-button" data-new-chat>Start a new conversation</button></p>
+        </div>
 
         <figure id="photo-preview" class="photo-preview" hidden>
           <img id="photo-image" alt="Your photo" />
@@ -140,6 +143,6 @@
       </section>
     </dialog>
 
-    <script src="/static/app.js?v=20260917b"></script>
+    <script src="/static/app.js?v=20260917e"></script>
   </body>
 </html>

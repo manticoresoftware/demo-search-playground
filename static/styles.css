@@ -214,6 +214,27 @@ mark {
   outline-offset: -1px;
 }
 
+/* In a conversation the question box follows the latest answer, like a chat, and stays in view while the thread scrolls. */
+.results > .query-box {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 0.875rem 0 1rem;
+  background: #ffffff;
+  border-top: 1px solid var(--line);
+}
+
+.results .turn:last-child {
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+
+.chat-note {
+  margin: 0.5rem 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .search-field {
   position: relative;
   display: flex;
