@@ -89,6 +89,8 @@ Every search endpoint returns the SQL it ran, so the playground and the website 
 
 When `custom_prompt` is omitted or blank, the app creates/reuses the default `shopping_assistant` chat model with the built-in prompt. When `custom_prompt` is non-empty, the app calculates a SHA-256 hash prefix for that prompt, creates/reuses `shopping_assistant_<hash>`, and calls that model so repeated prompt variants do not recreate duplicate chat models.
 
+Opening `/?mode=chat&q=<question>&ask=1` asks the question right away in a new conversation, so the visitor can continue with follow-ups. manticoresearch.com links its Ask AI answer here.
+
 Examples:
 
 ```bash

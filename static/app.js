@@ -850,3 +850,8 @@ state.categories.forEach((value) => {
 });
 els.query.value = params.get("q") || MODES[state.mode].examples[0] || "";
 setMode(state.mode);
+// manticoresearch.com's "Ask a follow-up" link lands here with the question it answered. Its answer is shared by every
+// homepage visitor, so the question is asked again to start a conversation of the visitor's own.
+if (state.mode === "chat" && params.get("ask") === "1" && els.query.value.trim()) {
+  submit().then(() => els.query.focus({ preventScroll: true }));
+}
