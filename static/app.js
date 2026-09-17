@@ -13,7 +13,7 @@ const COPIED_MS = 1500;
 // Words under 3 letters would mark half of every title.
 const MIN_HIGHLIGHT_LENGTH = 3;
 const TABLE = "convapparel_products";
-const CHAT_MODEL = "assistant_gpt41mini";
+const CHAT_MODEL = "shopping_assistant";
 const VECTOR_FIELD = "embedding_vector";
 
 const PLACEHOLDERS = { image: "Describe a look, or drop or paste a photo", chat: "Ask a shopping question" };
@@ -593,6 +593,25 @@ function clearPhoto() {
   els.query.placeholder = PLACEHOLDERS.image;
 }
 
+function closeSuggestions() {
+  clearTimeout(suggestTimer);
+  suggestController?.abort();
+  els.suggestions.hidden = true;
+  els.suggestions.innerHTML = "";
+  els.query.setAttribute("aria-expanded", "false");
+  els.query.removeAttribute("aria-activedescendant");
+}
+
+function showSuggestions(query, suggestions) {
+  // Completions extend the typed text, so the untyped rest carries the weight.
+  els.suggestions.innerHTML = suggestions
+    .map((suggestion, index) => `<li id="suggestion-${index}" role="option" aria-selected="false">${escapeHtml(suggestion.slice(0, query.length))}<b>${escapeHtml(suggestion.slice(query.length))}</b></li>`)
+    .join("");
+  els.suggestions.hidden = !suggestions.length;
+  els.query.setAttribute("aria-expanded", String(suggestions.length > 0));
+  els.query.removeAttribute("aria-activedescendant");
+}
+
 async function randomQuestion() {
   questionBank ??= api("/static/example_questions.json");
   const questions = (await questionBank).flatMap((example) => example.questions.map((question) => question.text));
@@ -625,8 +644,6 @@ function setMode(mode) {
   els.live.disabled = mode === "chat" || mode === "image" || mode === "geo";
   els.submit.textContent = mode === "chat" ? "Ask AI" : "Search";
   els.query.placeholder = PLACEHOLDERS[mode] || "Search products";
-  if (mode === "chat" || mode === "geo") els.query.removeAttribute("list");
-  else els.query.setAttribute("list", "suggestions");
   els.explain.textContent = MODES[mode].explain;
   renderExamples();
   // After a photo search the box is empty, so give the next search type something to run.
@@ -638,6 +655,9 @@ function setMode(mode) {
 
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
+  // A live search still waiting to fire would repeat this one.
+  clearTimeout(liveTimer);
+  closeSuggestions();
   submit();
 });
 
@@ -734,8 +754,9 @@ els.query.addEventListener("input", () => {
   clearTimeout(suggestTimer);
   clearTimeout(liveTimer);
   if (state.mode === "chat") return;
-  if (!els.query.value.trim()) {
-    els.suggestions.innerHTML = "";
+  const query = els.query.value;
+  if (!query.trim()) {
+    closeSuggestions();
     return;
   }
   // Chat answers cost seconds and a photo search ignores the words, so only typed searches run live.
@@ -744,12 +765,45 @@ els.query.addEventListener("input", () => {
     suggestController?.abort();
     suggestController = new AbortController();
     try {
-      const { suggestions } = await api(`/api/autocomplete?${new URLSearchParams({ q: els.query.value })}`, {}, suggestController.signal);
-      els.suggestions.innerHTML = suggestions.map((suggestion) => `<option value="${escapeHtml(suggestion)}"></option>`).join("");
+      const { suggestions } = await api(`/api/autocomplete?${new URLSearchParams({ q: query })}`, {}, suggestController.signal);
+      // An answer for an earlier prefix would flash completions that no longer fit.
+      if (query === els.query.value) showSuggestions(query, suggestions);
     } catch (error) {
-      if (error.name !== "AbortError") els.suggestions.innerHTML = "";
+      if (error.name !== "AbortError") closeSuggestions();
     }
   }, AUTOCOMPLETE_DELAY_MS);
+});
+
+els.query.addEventListener("keydown", (event) => {
+  if (els.suggestions.hidden) return;
+  const options = Array.from(els.suggestions.children);
+  const active = options.findIndex((option) => option.getAttribute("aria-selected") === "true");
+  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+  if (step) {
+    event.preventDefault();
+    const next = active < 0 ? (step > 0 ? 0 : options.length - 1) : (active + step + options.length) % options.length;
+    options.forEach((option, index) => option.setAttribute("aria-selected", String(index === next)));
+    els.query.setAttribute("aria-activedescendant", options[next].id);
+  } else if (event.key === "Enter" && active >= 0) {
+    event.preventDefault();
+    els.query.value = options[active].textContent;
+    els.form.requestSubmit();
+  } else if (event.key === "Escape") {
+    // Escape in a search box would also wipe the query.
+    event.preventDefault();
+    closeSuggestions();
+  }
+});
+
+els.query.addEventListener("blur", closeSuggestions);
+
+// Choosing on mousedown keeps focus in the box, so blur doesn't close the list first.
+els.suggestions.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+  const option = event.target.closest('[role="option"]');
+  if (!option) return;
+  els.query.value = option.textContent;
+  els.form.requestSubmit();
 });
 
 els.output.addEventListener("mouseover", (event) => {

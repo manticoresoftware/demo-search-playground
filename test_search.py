@@ -49,5 +49,7 @@ assert sql == (
 ), sql
 sql = build_geo_sql(40.7, -74.0, 0.5, None, 24, sql_quote)
 assert "REGEX" not in sql and "distance_km <= 0.5" in sql and sql.endswith("ORDER BY id ASC LIMIT 24 FACET category ORDER BY COUNT(*) DESC"), sql
+sql = build_geo_sql(40.7, -74.0, 10, None, 3, sql_quote, nearest=True)
+assert "ORDER BY distance_km ASC LIMIT 3 FACET" in sql, sql
 
 print("ok")

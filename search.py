@@ -54,7 +54,9 @@ def build_search_sql(query: str, mode: str, category: str | None, limit: int, fu
     return sql
 
 
-def build_geo_sql(lat: float, lon: float, radius_km: float, category: str | None, limit: int, quote: Quote) -> str:
+def build_geo_sql(
+    lat: float, lon: float, radius_km: float, category: str | None, limit: int, quote: Quote, nearest: bool = False
+) -> str:
     geodist = f"GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}})"
     conditions = [f"distance_km <= {radius_km:g}"]
     if category:
@@ -63,9 +65,11 @@ def build_geo_sql(lat: float, lon: float, radius_km: float, category: str | None
     # Order by id, not distance: coordinates are a hash of id, so id order is a deterministic sample that
     # spreads across the whole circle. Nearest-first would pack every result into the inner core,
     # making the map blob and the list look identical at every radius. The client sorts by distance.
+    # A short list with no map, like the homepage's top three, asks for the nearest products instead.
+    order = "distance_km" if nearest else "id"
     return (
         f"SELECT {GEO_COLUMNS}, {geodist} AS distance_km FROM {TABLE} "
-        f"WHERE {' AND '.join(conditions)} ORDER BY id ASC LIMIT {limit}"
+        f"WHERE {' AND '.join(conditions)} ORDER BY {order} ASC LIMIT {limit}"
         " FACET category ORDER BY COUNT(*) DESC"
     )
 
@@ -75,7 +79,9 @@ def build_suggest_sql(word: str, quote: Quote) -> str:
 
 
 def build_autocomplete_sql(word: str, quote: Quote) -> str:
-    return f"CALL AUTOCOMPLETE({quote(word)}, '{TABLE}', 0 AS fuzziness, 1 AS append)"
+    # By default the last word also expands as an infix, and matches like "print" for "int" crowd
+    # real completions out of the ten rows AUTOCOMPLETE returns.
+    return f"CALL AUTOCOMPLETE({quote(word)}, '{TABLE}', 0 AS fuzziness, 1 AS append, 0 AS prepend)"
 
 
 def build_similar_sql(product_id: int) -> str:

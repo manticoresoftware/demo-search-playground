@@ -21,7 +21,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260916g" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260917a" />
   </head>
   <body>
     <header class="topbar">
@@ -53,8 +53,10 @@
 
         <form id="search-form" class="search" role="search">
           <label class="sr-only" for="query">Search query</label>
-          <input id="query" name="q" type="search" list="suggestions" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" required />
-          <datalist id="suggestions"></datalist>
+          <div class="search-field">
+            <input id="query" name="q" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggestions" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+            <ul id="suggestions" class="suggestions" role="listbox" aria-label="Suggestions" hidden></ul>
+          </div>
           <label class="photo-pick" title="Search with a photo">
             <input id="photo-input" class="sr-only" type="file" accept="image/*" />
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>
@@ -138,6 +140,6 @@
       </section>
     </dialog>
 
-    <script src="/static/app.js?v=20260916i"></script>
+    <script src="/static/app.js?v=20260917a"></script>
   </body>
 </html>

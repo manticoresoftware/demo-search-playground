@@ -43,7 +43,7 @@ BASE_DIR = Path(__file__).parent
 MANTICORE_HTTP = "http://manticore:9308"
 EMBED_HTTP = "http://embed:8000"
 DEFAULT_TABLE = "convapparel_products"
-CHAT_DEFAULT_MODEL = "assistant_gpt41mini"
+CHAT_DEFAULT_MODEL = "shopping_assistant"
 VECTOR_FIELDS = "embedding_vector"
 CHAT_MODEL_OPTIONS = {
     "model": "openrouter:openai/gpt-4.1-mini",
@@ -58,10 +58,9 @@ Answer using only the provided context. Do not use outside knowledge, memory, as
 Write concise, helpful shopping recommendations. Prefer product details that are directly supported by the retrieved context.
 
 Citation rules:
-- Every recommendation or factual item must end with a citation.
-- Never include a reference ID within the item itself.
-- At the end of the item, append the reference context ID (`context[].id`) in the format `[ref:<id>]`.
-- Do not duplicate the references at the end of the whole answer."""
+- Cite a product right where you describe it: put its reference `[ref:<id>]`, using the context ID (`context[].id`), at the end of that sentence or list item.
+- Each sentence or list item carries only the references of the products it describes.
+- Never collect references at the end of the answer."""
 SUPPORTED_SORTS = {"relevance", "title"}
 INIT_MESSAGE = "Manticore is not initialized. Run ./scripts/init_manticore.sh, then reload the app."
 MAX_QUERY_LENGTH = 200
@@ -201,6 +200,7 @@ def search(
     lat: float = Query(GEO_LAT, ge=-90, le=90),
     lon: float = Query(GEO_LON, ge=-180, le=180),
     radius: float = Query(GEO_RADIUS_KM, ge=0.5, le=GEO_RADIUS_MAX_KM),
+    nearest: bool = False,
     limit: int = Query(12, ge=1, le=MAX_RESULTS),
 ) -> dict[str, Any]:
     query = q.strip()
@@ -209,7 +209,7 @@ def search(
         raise HTTPException(status_code=400, detail="q must contain at least one word")
     selected = category_filter(category)
     if mode == "geo":
-        sql = build_geo_sql(lat, lon, radius, selected, limit, sql_quote)
+        sql = build_geo_sql(lat, lon, radius, selected, limit, sql_quote, nearest)
         started = time.perf_counter()
         (hits, *facets), _ = timed_sql(sql)
         took_ms = elapsed_ms(started)

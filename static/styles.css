@@ -214,6 +214,46 @@ mark {
   outline-offset: -1px;
 }
 
+.search-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestions {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  left: 0;
+  z-index: 5;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px -12px rgba(34, 34, 34, 0.25);
+}
+
+.suggestions li {
+  padding: 0.375rem 0.75rem;
+  font-size: 15px;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.suggestions li:hover,
+.suggestions li[aria-selected="true"] {
+  background: var(--wash);
+}
+
+.suggestions b {
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .button {
   flex: none;
   height: 2.75rem;

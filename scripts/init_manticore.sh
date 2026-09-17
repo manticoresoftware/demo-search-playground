@@ -34,7 +34,7 @@ done
 echo "Dropping existing $TABLE_NAME table and default chat models if present..."
 docker exec "$container_id" sh -c "exec mysql -e \"DROP TABLE IF EXISTS $TABLE_NAME\"" >/dev/null
 docker exec "$container_id" sh -c 'exec mysql -e "DROP CHAT MODEL IF EXISTS assistant"' >/dev/null 2>&1 || true
-docker exec "$container_id" sh -c 'exec mysql -e "DROP CHAT MODEL IF EXISTS assistant_gpt41mini"' >/dev/null 2>&1 || true
+docker exec "$container_id" sh -c 'exec mysql -e "DROP CHAT MODEL IF EXISTS shopping_assistant"' >/dev/null 2>&1 || true
 
 dump_sql() {
   case "${table_dump_parts[0]}" in
