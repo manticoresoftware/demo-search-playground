@@ -91,7 +91,7 @@ Every search endpoint returns the SQL it ran, so the playground and the website 
 
 When `custom_prompt` is omitted or blank, the app creates/reuses the default `shopping_assistant` chat model with the built-in prompt. When `custom_prompt` is non-empty, the app calculates a SHA-256 hash prefix for that prompt, creates/reuses `shopping_assistant_<hash>`, and calls that model so repeated prompt variants do not recreate duplicate chat models.
 
-manticoresearch.com links its Ask AI answer to `/?mode=chat&conversation=<uuid>&sources=<ids>`. Every homepage visitor is shown the same answer, so the playground continues a copy of that conversation; follow-ups keep its context without reaching other visitors.
+manticoresearch.com links its Ask AI answer to `/?mode=chat&conversation=<uuid>&sources=<ids>`, and its follow-up box adds `&q=<question>`. Every homepage visitor is shown the same answer, so the playground continues a copy of that conversation and then asks `q`, if given, as the next message; follow-ups keep its context without reaching other visitors. If the copy fails, `q` stays in the box unsent.
 
 Examples:
 

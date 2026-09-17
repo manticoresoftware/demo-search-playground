@@ -555,12 +555,13 @@ async function runChat(message, signal) {
 }
 
 // Every homepage visitor sees the same answer, so it continues as a copy of its own.
-async function continueConversation(conversation, sources) {
+async function continueConversation(conversation, sources, followUp) {
   searchController?.abort();
   const controller = (searchController = new AbortController());
   setBusy(true);
-  // The box and the URL still hold the chat tab's example question.
-  els.query.value = "";
+  // The box would otherwise hold the chat tab's example question; a follow-up stays there until it is sent.
+  els.query.value = followUp;
+  // A reload must not copy the conversation or ask the follow-up again.
   syncUrl("");
   els.status.innerHTML = "<span>Opening the conversation…</span>";
   try {
@@ -576,7 +577,8 @@ async function continueConversation(conversation, sources) {
     els.status.innerHTML = "<span>Continuing your conversation from manticoresearch.com</span>";
     renderChat();
     els.query.placeholder = "Ask a follow-up question";
-    els.query.focus({ preventScroll: true });
+    if (followUp) await runChat(followUp, controller.signal);
+    else els.query.focus({ preventScroll: true });
   } catch (error) {
     if (error.name !== "AbortError") els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
   } finally {
@@ -828,7 +830,11 @@ els.query.addEventListener("input", () => {
     return;
   }
   // Chat answers cost seconds and a photo search ignores the words, so only typed searches run live.
-  if (els.live.checked && state.mode !== "image") liveTimer = setTimeout(submit, LIVE_SEARCH_DELAY_MS);
+  if (els.live.checked && !els.live.disabled) {
+    liveTimer = setTimeout(submit, LIVE_SEARCH_DELAY_MS);
+    // Results already follow every keystroke; a suggestion list would only cover them.
+    return;
+  }
   suggestTimer = setTimeout(async () => {
     suggestController?.abort();
     suggestController = new AbortController();
@@ -921,5 +927,5 @@ state.categories.forEach((value) => {
 });
 els.query.value = params.get("q") || MODES[state.mode].examples[0] || "";
 setMode(state.mode);
-// manticoresearch.com's "Ask a follow-up" link lands here with the conversation it showed.
-if (state.mode === "chat" && params.get("conversation")) continueConversation(params.get("conversation"), params.get("sources"));
+// manticoresearch.com's Ask AI demo lands here with the conversation it showed and, from its follow-up box, the next question.
+if (state.mode === "chat" && params.get("conversation")) continueConversation(params.get("conversation"), params.get("sources"), (params.get("q") || "").trim());
