@@ -10,6 +10,8 @@ const LIVE_SEARCH_DELAY_MS = 300;
 // Matches MAX_PHOTO_BYTES in app.py.
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const COPIED_MS = 1500;
+// Matches the 2.5rem edge fade on .modes in styles.css.
+const MODES_FADE_PX = 40;
 // Words under 3 letters would mark half of every title.
 const MIN_HIGHLIGHT_LENGTH = 3;
 const TABLE = "convapparel_products";
@@ -65,6 +67,7 @@ const MODES = {
 
 const $ = (id) => document.getElementById(id);
 const els = {
+  modes: document.querySelector(".modes"),
   tabs: Array.from(document.querySelectorAll('.modes [role="tab"]')),
   form: $("search-form"),
   intro: document.querySelector(".intro"),
@@ -660,6 +663,21 @@ function showSuggestions(query, suggestions) {
   els.query.removeAttribute("aria-activedescendant");
 }
 
+function fadeModes() {
+  const { modes } = els;
+  modes.classList.toggle("more-start", modes.scrollLeft > 1);
+  modes.classList.toggle("more-end", modes.scrollLeft + modes.clientWidth < modes.scrollWidth - 1);
+}
+
+// Links can open any search type, so on narrow screens the selected one scrolls into view.
+function revealTab(tab) {
+  const { modes } = els;
+  const left = tab.getBoundingClientRect().left - modes.getBoundingClientRect().left;
+  const hidden = (left < MODES_FADE_PX && modes.scrollLeft > 0) || left + tab.offsetWidth > modes.clientWidth - MODES_FADE_PX;
+  if (hidden) modes.scrollLeft += left - (modes.clientWidth - tab.offsetWidth) / 2;
+  fadeModes();
+}
+
 async function randomQuestion() {
   questionBank ??= api("/static/example_questions.json");
   const questions = (await questionBank).flatMap((example) => example.questions.map((question) => question.text));
@@ -687,6 +705,7 @@ function setMode(mode) {
     const selected = tab.dataset.tab === mode;
     tab.setAttribute("aria-selected", String(selected));
     tab.tabIndex = selected ? 0 : -1;
+    if (selected) revealTab(tab);
   });
   els.fuzzy.disabled = mode === "vector" || mode === "image" || mode === "geo";
   els.live.disabled = mode === "chat" || mode === "image" || mode === "geo";
@@ -888,6 +907,9 @@ document.addEventListener("click", (event) => {
     els.query.focus();
   }
 });
+
+els.modes.addEventListener("scroll", fadeModes, { passive: true });
+window.addEventListener("resize", fadeModes);
 
 els.fuzzy.checked = state.fuzzy;
 els.geoRadius.value = state.geo.radius;

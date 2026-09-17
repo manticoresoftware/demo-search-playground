@@ -115,6 +115,19 @@ mark {
   scrollbar-width: none;
 }
 
+/* On narrow screens the search types scroll sideways; a fade marks the edge that has more. */
+.modes.more-end {
+  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+}
+
+.modes.more-start {
+  mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+}
+
+.modes.more-start.more-end {
+  mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+}
+
 .modes button {
   flex: none;
   padding: 0.3125rem 0.75rem;
@@ -351,8 +364,10 @@ body.is-dragging .composer {
   font-size: 13px;
 }
 
+/* Typo tolerance and search as you type have nothing to act on in a question or on a map. */
 body[data-mode="chat"] .toggle,
-body[data-mode="chat"] .categories {
+body[data-mode="chat"] .categories,
+body[data-mode="geo"] .toggle {
   display: none;
 }
 
@@ -846,6 +861,11 @@ body[data-mode="chat"] .categories {
   overflow-wrap: anywhere;
   background: var(--code-bg);
   border-radius: 8px;
+}
+
+/* Until the first response the blocks hold room for their code instead of collapsing to a sliver. */
+.code:empty {
+  min-height: 4.5rem;
 }
 
 .code--light {
