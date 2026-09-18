@@ -47,16 +47,23 @@ dump_sql() {
   esac
 }
 
-# Fuzzy search and autocomplete need infixes; category facets need a string attribute.
+# Fuzzy search and autocomplete need infixes. A product can have several categories, stored as "bottoms, footwear";
+# the categories JSON array lists them one by one, so SQL filters them with IN () and FACET counts each one.
 patch_schema() {
   sed -e '1,/^);$/{' \
-    -e 's/^`category` text,$/`category` string attribute indexed,/' \
+    -e 's/^`category` text,$/`category` string attribute indexed, `categories` json,/' \
     -e "s/^);\$/) min_infix_len='2';/" \
     -e '}'
 }
 
 echo "Restoring $TABLE_DUMP..."
 dump_sql | patch_schema | docker exec -i "$container_id" sh -c 'exec mysql'
+
+echo "Filling categories..."
+docker exec -i "$container_id" sh -c 'exec mysql -N -B --skip-table' <<< "SELECT category FROM $TABLE_NAME GROUP BY category" |
+  while IFS= read -r category; do
+    printf "UPDATE %s SET categories='[\"%s\"]' WHERE category='%s';\n" "$TABLE_NAME" "${category//, /\",\"}" "$category"
+  done | docker exec -i "$container_id" sh -c 'exec mysql'
 
 shopt -s nullglob
 image_dump_parts=($IMAGE_DUMP)

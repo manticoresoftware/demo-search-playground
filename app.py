@@ -29,6 +29,7 @@ from search import (
     GEO_RADIUS_MAX_KM,
     SIMILAR_LIMIT,
     build_autocomplete_sql,
+    build_count_sql,
     build_geo_points_sql,
     build_geo_sql,
     build_image_knn_sql,
@@ -167,21 +168,21 @@ def embed(path: str, payload: dict[str, Any]) -> Any:
         raise HTTPException(status_code=503, detail=EMBED_UNAVAILABLE) from exc
 
 
-def ranked_products(distances: dict[int, float], category: str | None, limit: int) -> tuple[list[dict[str, Any]], str, int]:
+def ranked_products(distances: dict[int, float], categories: list[str] | None, limit: int) -> tuple[list[dict[str, Any]], str, int]:
     """Loads the products behind photo matches, closest first: hits, the SQL to show, and its time."""
     ids = list(distances)
     if not ids:
         return [], "", 0
-    (products,), took_ms = timed_sql(build_products_sql(sql_list(ids), category, sql_quote))
+    (products,), took_ms = timed_sql(build_products_sql(sql_list(ids), categories, sql_quote))
     ranked = sorted(products["data"], key=lambda row: distances[row["id"]])
     hits = [to_hit({**row, "distance": distances[row["id"]]}) for row in ranked[:limit]]
-    return hits, build_products_sql(sql_list(ids, preview=True), category, sql_quote), took_ms
+    return hits, build_products_sql(sql_list(ids, preview=True), categories, sql_quote), took_ms
 
 
 def search_by_vector(query: str, vector: list[float], embed_ms: int, category: str | None, limit: int) -> dict[str, Any]:
     (neighbors,), knn_ms = timed_sql(build_image_knn_sql(sql_list(vector)))
     distances = {row["id"]: row["distance"] for row in neighbors["data"]}
-    hits, products_sql, products_ms = ranked_products(distances, category, limit)
+    hits, products_sql, products_ms = ranked_products(distances, category_filter(category), limit)
     shown_vector = sql_list([round(value, 4) for value in vector], preview=True)
     return {
         "query": query,
@@ -223,10 +224,8 @@ def search(
     selected = category_filter(category)
     if mode == "geo":
         sql = build_geo_sql(lat, lon, radius, selected, limit, sql_quote, nearest)
-        started = time.perf_counter()
-        (hits, *facets), _ = timed_sql(sql)
-        took_ms = elapsed_ms(started)
-        facet_rows = facets[0]["data"] if facets else None
+        # Manticore rejects inline GEODIST in a COUNT query, so the total comes from the search itself.
+        (hits, meta), took_ms = timed_sql(f"{sql}; SHOW META LIKE 'total_found'")
         return {
             "query": query,
             "mode": mode,
@@ -234,8 +233,7 @@ def search(
             "fuzzy": False,
             "sql": sql,
             "took_ms": took_ms,
-            # Facet counts rows inside the same radius, so the total tracks the radius instead of LIMIT.
-            "total": sum(row["count(*)"] for row in facet_rows) if facet_rows is not None else None,
+            "total": int(meta["data"][0]["Value"]),
             "corrected": None,
             "terms": [],
             "facets": None,
@@ -247,11 +245,15 @@ def search(
     if mode == "image":
         started = time.perf_counter()
         vector = embed("/text", {"text": query})
-        return search_by_vector(query, vector, elapsed_ms(started), selected, limit)
+        return search_by_vector(query, vector, elapsed_ms(started), category, limit)
 
     sql = build_search_sql(query, mode, selected, limit, fuzzy, sql_quote)
     (hits, *facets), took_ms = timed_sql(sql)
     facet_rows = facets[0]["data"] if facets else None
+    total = None
+    if mode == "fulltext":
+        (count,) = run_sql(build_count_sql(query, selected, fuzzy, sql_quote))
+        total = count["data"][0]["count(*)"]
     terms = [] if mode == "vector" else words
     if fuzzy and terms:
         terms = [suggest_word(word) for word in words]
@@ -263,7 +265,7 @@ def search(
         "fuzzy": fuzzy,
         "sql": sql,
         "took_ms": took_ms,
-        "total": sum(row["count(*)"] for row in facet_rows) if facet_rows is not None else None,
+        "total": total,
         "corrected": " ".join(terms) if terms != words and terms else None,
         "terms": terms,
         "facets": category_counts(facet_rows) if facet_rows is not None else None,
@@ -271,15 +273,15 @@ def search(
     }
 
 
-def category_filter(category: str | None) -> str | None:
-    """Comma-separated category names become one REGEX alternation the SQL builders quote."""
+def category_filter(category: str | None) -> list[str] | None:
+    """Comma-separated category names become the list the SQL builders quote."""
     if not category:
         return None
     names = category.split(",")
     unknown = [name for name in names if name not in CATEGORIES]
     if unknown:
         raise HTTPException(status_code=422, detail=f"unknown categories: {', '.join(unknown)}")
-    return "|".join(names)
+    return names
 
 
 @app.get("/api/geo/points")

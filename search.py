@@ -32,7 +32,11 @@ def query_words(query: str) -> list[str]:
     return re.findall(r"\w+", query.lower())
 
 
-def build_search_sql(query: str, mode: str, category: str | None, limit: int, fuzzy: bool, quote: Quote) -> str:
+def category_condition(categories: list[str], quote: Quote) -> str:
+    return f"categories IN ({', '.join(map(quote, categories))})"
+
+
+def build_search_sql(query: str, mode: str, categories: list[str] | None, limit: int, fuzzy: bool, quote: Quote) -> str:
     columns = [PRODUCT_COLUMNS]
     conditions = []
     options = []
@@ -46,26 +50,35 @@ def build_search_sql(query: str, mode: str, category: str | None, limit: int, fu
         conditions.append(f"knn(embedding_vector, {KNN_CANDIDATES}, {quote(query)})")
     if mode == "hybrid":
         options.append("fusion_method='rrf'")
-    if category:
-        conditions.append(f"REGEX(category, {quote(category)})")
+    if categories:
+        conditions.append(category_condition(categories, quote))
 
     sql = f"SELECT {', '.join(columns)} FROM {TABLE} WHERE {' AND '.join(conditions)} LIMIT {limit}"
     if options:
         sql += f" OPTION {', '.join(options)}"
     if mode == "fulltext":
         # KNN candidates make facet counts meaningless, and hybrid search rejects FACET outright.
-        sql += " FACET category ORDER BY COUNT(*) DESC"
+        sql += " FACET categories ORDER BY COUNT(*) DESC"
     return sql
 
 
+def build_count_sql(query: str, categories: list[str] | None, fuzzy: bool, quote: Quote) -> str:
+    # Facet counts overlap for products in several categories, and fuzzy search runs through Buddy,
+    # which answers neither SHOW META nor a second statement, so the total needs its own query.
+    conditions = [f"MATCH({quote(' '.join(query_words(query)))})"]
+    if categories:
+        conditions.append(category_condition(categories, quote))
+    sql = f"SELECT COUNT(*) FROM {TABLE} WHERE {' AND '.join(conditions)}"
+    return f"{sql} OPTION fuzzy=1" if fuzzy else sql
+
+
 def build_geo_sql(
-    lat: float, lon: float, radius_km: float, category: str | None, limit: int, quote: Quote, nearest: bool = False
+    lat: float, lon: float, radius_km: float, categories: list[str] | None, limit: int, quote: Quote, nearest: bool = False
 ) -> str:
     geodist = f"GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}})"
     conditions = [f"distance_km <= {radius_km:g}"]
-    if category:
-        conditions.append(f"REGEX(category, {quote(category)})")
-    # The facet sums to the row count inside the same radius filter; Manticore rejects inline GEODIST in a COUNT query.
+    if categories:
+        conditions.append(category_condition(categories, quote))
     # Order by id, not distance: coordinates are a hash of id, so id order is a deterministic sample that
     # spreads across the whole circle. Nearest-first would pack every result into the inner core,
     # making the map blob and the list look identical at every radius. The client sorts by distance.
@@ -74,7 +87,6 @@ def build_geo_sql(
     return (
         f"SELECT {GEO_COLUMNS}, {geodist} AS distance_km FROM {TABLE} "
         f"WHERE {' AND '.join(conditions)} ORDER BY {order} ASC LIMIT {limit}"
-        " FACET category ORDER BY COUNT(*) DESC"
     )
 
 
@@ -123,10 +135,10 @@ def build_similar_photo_sql(product_id: int) -> str:
     )
 
 
-def build_products_sql(ids_sql: str, category: str | None, quote: Quote) -> str:
+def build_products_sql(ids_sql: str, categories: list[str] | None, quote: Quote) -> str:
     conditions = [f"id IN {ids_sql}"]
-    if category:
-        conditions.append(f"REGEX(category, {quote(category)})")
+    if categories:
+        conditions.append(category_condition(categories, quote))
     return f"SELECT {PRODUCT_COLUMNS} FROM {TABLE} WHERE {' AND '.join(conditions)} LIMIT {KNN_CANDIDATES}"
 
 
@@ -147,13 +159,7 @@ def to_hit(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def category_counts(facet_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # Products can belong to several categories, stored as "bottoms, footwear".
-    counts = dict.fromkeys(CATEGORIES, 0)
-    for row in facet_rows:
-        for name in row["category"].split(", "):
-            counts[name] += row["count(*)"]
-    ranked = sorted(counts.items(), key=lambda item: -item[1])
-    return [{"value": name, "count": count} for name, count in ranked if count]
+    return [{"value": row["categories"], "count": row["count(*)"]} for row in facet_rows]
 
 
 def complete_query(query: str, suggestions: list[str]) -> list[str]:
