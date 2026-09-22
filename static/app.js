@@ -17,6 +17,8 @@ const MIN_HIGHLIGHT_LENGTH = 3;
 const TABLE = "convapparel_products";
 const CHAT_MODEL = "shopping_assistant";
 const VECTOR_FIELD = "embedding_vector";
+// Manticore's default HTTP port: the curl runs on the reader's own server, since the playground's Manticore isn't public.
+const MANTICORE_SQL_URL = "localhost:9308/sql?mode=raw";
 
 const PLACEHOLDERS = { image: "Describe a look, or drop or paste a photo", chat: "Ask a shopping question" };
 
@@ -147,6 +149,11 @@ function shellQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+// Double quotes keep the SQL's own single quotes readable. A backslash can't escape ! inside them, so ! falls back to single quotes.
+function shellArg(value) {
+  return value.includes("!") ? shellQuote(value) : `"${value.replace(/["$`\\]/g, "\\$&")}"`;
+}
+
 // Amazon serves any width from the same URL; the originals are up to 1500px wide.
 function thumbnail(url, width) {
   return url.replace(/\._AC_[A-Z0-9_]+_\./, `._AC_UL${width}_.`);
@@ -158,16 +165,23 @@ function highlight(text, terms) {
   return words.length ? safe.replace(new RegExp(`\\b((?:${words.join("|")})\\w*)`, "gi"), "<mark>$1</mark>") : safe;
 }
 
+// Odd parts are string literals, which keep their words untouched.
+function sqlParts(sql) {
+  return sql.split(/('(?:\\.|[^'\\])*')/);
+}
+
+function formatSql(sql) {
+  return sqlParts(sql)
+    .map((part, index) => (index % 2 ? part : part.replace(/\s+(FROM|WHERE|LIMIT|OPTION|FACET)\b/g, "\n$1").replace(/\s+AND\b/g, "\n  AND")))
+    .join("");
+}
+
 function highlightSql(sql) {
-  return sql
-    .split(/('(?:\\.|[^'\\])*')/)
+  return sqlParts(formatSql(sql))
     .map((part, index) =>
       index % 2
         ? `<span class="sql-str">${escapeHtml(part)}</span>`
-        : escapeHtml(part)
-            .replace(/\s+(FROM|WHERE|LIMIT|OPTION|FACET)\b/g, "\n$1")
-            .replace(/\s+AND\b/g, "\n  AND")
-            .replace(/\b(SELECT|FROM|WHERE|AND|LIMIT|OPTION|FACET|ORDER BY|DESC|AS|CALL)\b/g, '<span class="sql-kw">$1</span>'),
+        : escapeHtml(part).replace(/\b(SELECT|FROM|WHERE|AND|LIMIT|OPTION|FACET|ORDER BY|DESC|AS|CALL)\b/g, '<span class="sql-kw">$1</span>'),
     )
     .join("");
 }
@@ -247,9 +261,10 @@ function setBusy(busy) {
   else els.results.removeAttribute("aria-busy");
 }
 
-function showInspector(sqls, request) {
+function showInspector(sqls) {
   els.sql.innerHTML = sqls.map(highlightSql).join("\n\n");
   els.sql.dataset.raw = sqls.join(";\n");
+  const request = sqls.map((sql) => `curl ${shellQuote(MANTICORE_SQL_URL)} \\\n  -d ${shellArg(formatSql(sql))}`).join("\n\n");
   els.request.textContent = request;
   els.request.dataset.raw = request;
 }
@@ -308,10 +323,7 @@ async function runSearch(query, signal) {
   const result = photo
     ? await api(path, { method: "POST", headers: { "Content-Type": photo.type }, body: photo }, signal)
     : await api(path, {}, signal);
-  const request = photo
-    ? `curl -X POST ${shellQuote(location.origin + path)} \\\n  -H ${shellQuote(`Content-Type: ${photo.type}`)} \\\n  --data-binary @${shellQuote(photo.name)}`
-    : `curl ${shellQuote(location.origin + path)}`;
-  showInspector([result.sql], request);
+  showInspector([result.sql]);
   updateCounts(result);
   const rankedBy = { vector: "meaning", hybrid: "words and meaning", image: "look" }[result.mode];
   const found =
@@ -399,7 +411,7 @@ async function runGeo(signal) {
   const L = await ensureGeoMap();
   const path = geoPath(GEO_LIMIT);
   const result = await api(path, {}, signal);
-  showInspector([result.sql], `curl ${shellQuote(location.origin + path)}`);
+  showInspector([result.sql]);
   updateCounts(result);
   const list = document.getElementById("geo-list");
   // The SQL samples by id so pins spread across the whole circle; the list still reads nearest-first.
@@ -450,10 +462,7 @@ async function runCompare(query, signal) {
   const results = await Promise.all(paths.map((path) => api(path, {}, signal)));
   const foundBy = new Map();
   results.forEach((result) => result.hits.forEach((hit) => foundBy.set(hit.id, (foundBy.get(hit.id) || 0) + 1)));
-  showInspector(
-    results.map((result) => result.sql),
-    paths.map((path) => `curl ${shellQuote(location.origin + path)}`).join("\n"),
-  );
+  showInspector(results.map((result) => result.sql));
   updateCounts(results[0]);
   els.status.innerHTML = "<span>The same query in three search types. Products found by more than one are marked.</span>";
   els.output.innerHTML = `<div class="compare">${results.map((result) => compareColumn(result, foundBy)).join("")}</div>`;
@@ -480,11 +489,6 @@ function compareColumn(result, foundBy) {
 
 function chatSql(message) {
   return `CALL CHAT(${[message, TABLE, CHAT_MODEL, state.conversation || "", VECTOR_FIELD].map(sqlString).join(", ")})`;
-}
-
-function chatRequest(message) {
-  const body = JSON.stringify({ message, conversation_uuid: state.conversation });
-  return `curl -X POST ${shellQuote(`${location.origin}/api/assistant/chat`)} \\\n  -H 'Content-Type: application/json' \\\n  -d ${shellQuote(body)}`;
 }
 
 function turnHtml({ message, result }) {
@@ -532,13 +536,13 @@ function placeQueryBox() {
 function showChat() {
   const message = els.query.value.trim();
   syncUrl(message);
-  showInspector([chatSql(message)], chatRequest(message));
+  showInspector([chatSql(message)]);
   els.status.innerHTML = "<span>Answers take 5 to 15 seconds.</span>";
   renderChat();
 }
 
 async function runChat(message, signal) {
-  showInspector([chatSql(message)], chatRequest(message));
+  showInspector([chatSql(message)]);
   els.status.innerHTML = "<span>Finding products and writing an answer. This takes 5 to 15 seconds.</span>";
   const result = await api(
     "/api/assistant/chat",
@@ -571,7 +575,7 @@ async function continueConversation(conversation, sources, followUp) {
       controller.signal,
     );
     const last = copy.turns[copy.turns.length - 1];
-    showInspector([chatSql(last.message)], chatRequest(last.message));
+    showInspector([chatSql(last.message)]);
     state.conversation = copy.conversation_uuid;
     state.turns = copy.turns.map((turn) => ({ message: turn.message, result: turn }));
     els.status.innerHTML = "<span>Continuing your conversation from manticoresearch.com</span>";
