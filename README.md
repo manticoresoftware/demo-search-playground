@@ -74,12 +74,12 @@ The key is passed into the `manticore` service and used when the app creates Man
 
 ## API
 
-Every search endpoint returns the SQL it ran, so the playground and the website can show it next to the results.
+Every search endpoint returns the SQL it ran (`sql`) and the same query as bodies for Manticore's JSON `/search` endpoint (`requests`), so the playground and the website can show them next to the results.
 
 - `GET /api/search`
   - Query: `q` (up to 200 characters), `mode` (`fulltext`, `vector`, `hybrid`, `image` or `geo`, default `hybrid`), optional `category` (comma-separated, e.g. `tops,footwear`), `fuzzy` (default `true`), `limit` (1 to 100, default 12). `geo` mode ignores `q` and takes `lat`, `lon` (default New York) and `radius` in kilometers (0.5 to 25, default 10) instead, and `total` shows how many products the radius really matches.
   - fulltext runs `MATCH()` with `OPTION fuzzy=1` and `FACET categories`, `vector` runs `knn()` with the query text, `hybrid` runs both with `OPTION fusion_method='rrf'`, `image` turns the text into a Fashion CLIP vector and searches the product photos, and `geo` filters with `GEODIST()` on the `lat`/`lon` attributes baked into the product dump. Geo orders by `id` — coordinates are a hash of id, so the page shows a deterministic sample spread across the whole circle instead of a cluster of the nearest items; the UI sorts hits by distance for the list. `nearest=1` orders by distance instead, for short lists without a map.
-  - Response: `sql`, `took_ms` and `hits`. Full-text and geo also return `total`; full-text adds `facets`. When typo tolerance changed a word, `corrected` holds the query found with `CALL QSUGGEST`, and `terms` holds the words to highlight. Image search adds `embed_ms`, the time spent turning the query into a vector; geo hits add `lat`, `lon` and `distance_km`.
+  - Response: `sql`, `requests`, `took_ms` and `hits`. Full-text and geo also return `total`; full-text adds `facets`. When typo tolerance changed a word, `corrected` holds the query found with `CALL QSUGGEST`, and `terms` holds the words to highlight. Image search adds `embed_ms`, the time spent turning the query into a vector; geo hits add `lat`, `lon` and `distance_km`.
 - `GET /api/geo/points?lat=&lon=&radius=&limit=` returns only the coordinates of products within `radius` km (up to 100) as `points` (`[[lat, lon], …]`, up to 1,000, sampled in id order), for drawing products as map dots.
 - `POST /api/search/image` searches by photo. Send the photo (up to 5 MB) as the request body with an `image/*` `Content-Type`; `category` and `limit` work as above.
 - `GET /api/autocomplete?q=` completes the last word with `CALL AUTOCOMPLETE`.

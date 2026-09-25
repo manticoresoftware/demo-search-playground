@@ -30,16 +30,24 @@ from search import (
     SIMILAR_LIMIT,
     build_autocomplete_sql,
     build_count_sql,
+    build_geo_json,
     build_geo_points_sql,
     build_geo_sql,
+    build_image_knn_json,
     build_image_knn_sql,
+    build_products_json,
     build_products_sql,
+    build_search_json,
     build_search_sql,
+    build_similar_json,
+    build_similar_photo_json,
     build_similar_photo_sql,
     build_similar_sql,
     build_suggest_sql,
     category_counts,
     complete_query,
+    json_list,
+    json_text,
     query_words,
     sql_list,
     to_hit,
@@ -168,28 +176,30 @@ def embed(path: str, payload: dict[str, Any]) -> Any:
         raise HTTPException(status_code=503, detail=EMBED_UNAVAILABLE) from exc
 
 
-def ranked_products(distances: dict[int, float], categories: list[str] | None, limit: int) -> tuple[list[dict[str, Any]], str, int]:
-    """Loads the products behind photo matches, closest first: hits, the SQL to show, and its time."""
+def ranked_products(distances: dict[int, float], categories: list[str] | None, limit: int) -> tuple[list[dict[str, Any]], str, str, int]:
+    """Loads the products behind photo matches, closest first: hits, the SQL and JSON to show, and the time."""
     ids = list(distances)
     if not ids:
-        return [], "", 0
+        return [], "", "", 0
     (products,), took_ms = timed_sql(build_products_sql(sql_list(ids), categories, sql_quote))
     ranked = sorted(products["data"], key=lambda row: distances[row["id"]])
     hits = [to_hit({**row, "distance": distances[row["id"]]}) for row in ranked[:limit]]
-    return hits, build_products_sql(sql_list(ids, preview=True), categories, sql_quote), took_ms
+    shown_sql = build_products_sql(sql_list(ids, preview=True), categories, sql_quote)
+    return hits, shown_sql, json_text(build_products_json(json_list(ids, preview=True), categories)), took_ms
 
 
 def search_by_vector(query: str, vector: list[float], embed_ms: int, category: str | None, limit: int) -> dict[str, Any]:
     (neighbors,), knn_ms = timed_sql(build_image_knn_sql(sql_list(vector)))
     distances = {row["id"]: row["distance"] for row in neighbors["data"]}
-    hits, products_sql, products_ms = ranked_products(distances, category_filter(category), limit)
-    shown_vector = sql_list([round(value, 4) for value in vector], preview=True)
+    hits, products_sql, products_json, products_ms = ranked_products(distances, category_filter(category), limit)
+    rounded = [round(value, 4) for value in vector]
     return {
         "query": query,
         "mode": "image",
         "category": category,
         "fuzzy": False,
-        "sql": ";\n".join(filter(None, [build_image_knn_sql(shown_vector), products_sql])),
+        "sql": ";\n".join(filter(None, [build_image_knn_sql(sql_list(rounded, preview=True)), products_sql])),
+        "requests": list(filter(None, [json_text(build_image_knn_json(json_list(rounded, preview=True))), products_json])),
         "took_ms": knn_ms + products_ms,
         "embed_ms": embed_ms,
         "total": None,
@@ -232,6 +242,7 @@ def search(
             "category": category,
             "fuzzy": False,
             "sql": sql,
+            "requests": [json_text(build_geo_json(lat, lon, radius, selected, limit, nearest))],
             "took_ms": took_ms,
             "total": int(meta["data"][0]["Value"]),
             "corrected": None,
@@ -264,6 +275,7 @@ def search(
         "category": category,
         "fuzzy": fuzzy,
         "sql": sql,
+        "requests": [json_text(build_search_json(query, mode, selected, limit, fuzzy))],
         "took_ms": took_ms,
         "total": total,
         "corrected": " ".join(terms) if terms != words and terms else None,
@@ -385,12 +397,17 @@ def similar(product_id: int = PathParam(ge=1), by: Literal["description", "photo
         knn_sql = build_similar_photo_sql(product_id)
         (neighbors,), knn_ms = timed_sql(knn_sql)
         distances = {row["id"]: row["distance"] for row in neighbors["data"]}
-        hits, products_sql, products_ms = ranked_products(distances, None, SIMILAR_LIMIT)
-        return {"sql": ";\n".join(filter(None, [knn_sql, products_sql])), "took_ms": knn_ms + products_ms, "hits": hits}
+        hits, products_sql, products_json, products_ms = ranked_products(distances, None, SIMILAR_LIMIT)
+        return {
+            "sql": ";\n".join(filter(None, [knn_sql, products_sql])),
+            "requests": list(filter(None, [json_text(build_similar_photo_json(product_id)), products_json])),
+            "took_ms": knn_ms + products_ms,
+            "hits": hits,
+        }
 
     sql = build_similar_sql(product_id)
     (hits,), took_ms = timed_sql(sql)
-    return {"sql": sql, "took_ms": took_ms, "hits": [to_hit(row) for row in hits["data"]]}
+    return {"sql": sql, "requests": [json_text(build_similar_json(product_id))], "took_ms": took_ms, "hits": [to_hit(row) for row in hits["data"]]}
 
 
 app.post("/api/assistant/chat")(

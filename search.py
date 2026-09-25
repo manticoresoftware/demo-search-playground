@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Callable
 
@@ -8,6 +9,10 @@ IMAGE_TABLE = "convapparel_product_images"
 CATEGORIES = ("tops", "footwear", "outerwear", "bottoms")
 PRODUCT_COLUMNS = "id, title, description, features, category, image_url"
 GEO_COLUMNS = f"{PRODUCT_COLUMNS}, lat, lon"
+# JSON hits always carry the id as _id, so the bodies list only the other columns.
+SOURCE_COLUMNS = ["title", "description", "features", "category", "image_url"]
+GEO_SOURCE_COLUMNS = SOURCE_COLUMNS + ["lat", "lon", "distance_km"]
+FACET_AGGS = {"categories": {"terms": {"field": "categories"}, "sort": [{"count(*)": {"order": "desc"}}]}}
 # Geo search pins the shopper in New York; the dump scatters products roughly +/-150 km around it.
 GEO_LAT, GEO_LON = 40.7128, -74.0060
 GEO_RADIUS_KM = 10.0
@@ -21,6 +26,8 @@ SIMILAR_LIMIT = 8
 AUTOCOMPLETE_LIMIT = 6
 # The SQL shown to people keeps a few of the 512 vector numbers and 100 ids; the executed query has all of them.
 PREVIEW_VALUES = 3
+# Stands in for the dropped values inside JSON bodies until json_text() turns it into a bare ellipsis.
+MORE = "__more__"
 # Cosine distance never exceeds 2; hybrid rows found only by keywords report FLT_MAX instead.
 MAX_COSINE_DISTANCE = 2.0
 
@@ -34,6 +41,15 @@ def query_words(query: str) -> list[str]:
 
 def category_condition(categories: list[str], quote: Quote) -> str:
     return f"categories IN ({', '.join(map(quote, categories))})"
+
+
+def category_condition_json(categories: list[str]) -> dict[str, Any]:
+    return {"in": {"categories": categories}}
+
+
+def json_filters(*conditions: dict[str, Any] | None) -> dict[str, Any]:
+    present = [condition for condition in conditions if condition]
+    return present[0] if len(present) == 1 else {"bool": {"must": present}}
 
 
 def build_search_sql(query: str, mode: str, categories: list[str] | None, limit: int, fuzzy: bool, quote: Quote) -> str:
@@ -62,6 +78,32 @@ def build_search_sql(query: str, mode: str, categories: list[str] | None, limit:
     return sql
 
 
+def build_search_json(query: str, mode: str, categories: list[str] | None, limit: int, fuzzy: bool) -> dict[str, Any]:
+    body: dict[str, Any] = {"table": TABLE}
+    conditions = []
+    if mode != "vector":
+        # query_string keeps the AND between words that MATCH() has; a JSON match defaults to OR, and fuzzy search ignores its operator.
+        conditions.append({"query_string": " ".join(query_words(query))})
+    if categories:
+        conditions.append(category_condition_json(categories))
+    if conditions:
+        body["query"] = json_filters(*conditions)
+    if mode != "fulltext":
+        body["knn"] = {"field": "embedding_vector", "query": query, "k": KNN_CANDIDATES}
+    options = {}
+    if mode != "vector" and fuzzy:
+        options["fuzzy"] = True
+    if mode == "hybrid":
+        options["fusion_method"] = "rrf"
+    if options:
+        body["options"] = options
+    body["limit"] = limit
+    body["_source"] = SOURCE_COLUMNS
+    if mode == "fulltext":
+        body["aggs"] = FACET_AGGS
+    return body
+
+
 def build_count_sql(query: str, categories: list[str] | None, fuzzy: bool, quote: Quote) -> str:
     # Facet counts overlap for products in several categories, and fuzzy search runs through Buddy,
     # which answers neither SHOW META nor a second statement, so the total needs its own query.
@@ -72,10 +114,13 @@ def build_count_sql(query: str, categories: list[str] | None, fuzzy: bool, quote
     return f"{sql} OPTION fuzzy=1" if fuzzy else sql
 
 
+def geodist(lat: float, lon: float) -> str:
+    return f"GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}})"
+
+
 def build_geo_sql(
     lat: float, lon: float, radius_km: float, categories: list[str] | None, limit: int, quote: Quote, nearest: bool = False
 ) -> str:
-    geodist = f"GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}})"
     conditions = [f"distance_km <= {radius_km:g}"]
     if categories:
         conditions.append(category_condition(categories, quote))
@@ -85,15 +130,27 @@ def build_geo_sql(
     # A short list with no map, like the homepage's top three, asks for the nearest products instead.
     order = "distance_km" if nearest else "id"
     return (
-        f"SELECT {GEO_COLUMNS}, {geodist} AS distance_km FROM {TABLE} "
+        f"SELECT {GEO_COLUMNS}, {geodist(lat, lon)} AS distance_km FROM {TABLE} "
         f"WHERE {' AND '.join(conditions)} ORDER BY {order} ASC LIMIT {limit}"
     )
+
+
+def build_geo_json(lat: float, lon: float, radius_km: float, categories: list[str] | None, limit: int, nearest: bool = False) -> dict[str, Any]:
+    within = {"geo_distance": {"location_anchor": {"lat": lat, "lon": lon}, "location_source": "lat,lon", "distance": f"{radius_km:g} km"}}
+    return {
+        "table": TABLE,
+        "query": json_filters(within, category_condition_json(categories) if categories else None),
+        "expressions": {"distance_km": geodist(lat, lon)},
+        "sort": [{"distance_km" if nearest else "id": "asc"}],
+        "limit": limit,
+        "_source": GEO_SOURCE_COLUMNS,
+    }
 
 
 def build_geo_points_sql(lat: float, lon: float, radius_km: float, limit: int) -> str:
     # Id order samples evenly across the circle, as in build_geo_sql.
     return (
-        f"SELECT lat, lon, GEODIST({lat:.6f}, {lon:.6f}, lat, lon, {{in=degrees, out=km}}) AS distance_km FROM {TABLE} "
+        f"SELECT lat, lon, {geodist(lat, lon)} AS distance_km FROM {TABLE} "
         f"WHERE distance_km <= {radius_km:g} ORDER BY id ASC LIMIT {limit}"
     )
 
@@ -115,10 +172,30 @@ def build_similar_sql(product_id: int) -> str:
     )
 
 
+def build_similar_json(product_id: int) -> dict[str, Any]:
+    return {
+        "table": TABLE,
+        "knn": {"field": "embedding_vector", "doc_id": product_id, "k": SIMILAR_LIMIT},
+        "limit": SIMILAR_LIMIT,
+        "_source": SOURCE_COLUMNS,
+    }
+
+
 def sql_list(values: list[Any], preview: bool = False) -> str:
     shown = values[:PREVIEW_VALUES] if preview else values
     more = ", …" if preview and len(values) > PREVIEW_VALUES else ""
     return f"({', '.join(map(str, shown))}{more})"
+
+
+def json_list(values: list[Any], preview: bool = False) -> list[Any]:
+    shown = list(values[:PREVIEW_VALUES] if preview else values)
+    return shown + [MORE] if preview and len(values) > PREVIEW_VALUES else shown
+
+
+def json_text(body: dict[str, Any]) -> str:
+    # One top-level key per line, the way the SQL shows one clause per line.
+    lines = [f'  "{key}": {json.dumps(value, ensure_ascii=False)}' for key, value in body.items()]
+    return ("{\n" + ",\n".join(lines) + "\n}").replace(f'"{MORE}"', "…")
 
 
 def build_image_knn_sql(vector_sql: str) -> str:
@@ -128,6 +205,15 @@ def build_image_knn_sql(vector_sql: str) -> str:
     )
 
 
+def build_image_knn_json(vector: list[Any]) -> dict[str, Any]:
+    return {
+        "table": IMAGE_TABLE,
+        "knn": {"field": "image_vector", "query_vector": vector, "k": KNN_CANDIDATES},
+        "limit": KNN_CANDIDATES,
+        "_source": ["id"],
+    }
+
+
 def build_similar_photo_sql(product_id: int) -> str:
     return (
         f"SELECT id, knn_dist() AS distance FROM {IMAGE_TABLE} "
@@ -135,11 +221,29 @@ def build_similar_photo_sql(product_id: int) -> str:
     )
 
 
+def build_similar_photo_json(product_id: int) -> dict[str, Any]:
+    return {
+        "table": IMAGE_TABLE,
+        "knn": {"field": "image_vector", "doc_id": product_id, "k": SIMILAR_LIMIT},
+        "limit": SIMILAR_LIMIT,
+        "_source": ["id"],
+    }
+
+
 def build_products_sql(ids_sql: str, categories: list[str] | None, quote: Quote) -> str:
     conditions = [f"id IN {ids_sql}"]
     if categories:
         conditions.append(category_condition(categories, quote))
     return f"SELECT {PRODUCT_COLUMNS} FROM {TABLE} WHERE {' AND '.join(conditions)} LIMIT {KNN_CANDIDATES}"
+
+
+def build_products_json(ids: list[Any], categories: list[str] | None) -> dict[str, Any]:
+    return {
+        "table": TABLE,
+        "query": json_filters({"in": {"id": ids}}, category_condition_json(categories) if categories else None),
+        "limit": KNN_CANDIDATES,
+        "_source": SOURCE_COLUMNS,
+    }
 
 
 def to_hit(row: dict[str, Any]) -> dict[str, Any]:
