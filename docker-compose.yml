@@ -17,6 +17,8 @@ services:
     build: .
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
+    environment:
+      POSTHOG_KEY: ${POSTHOG_KEY:-}
     command: >
       sh -c "uvicorn app:app --host 0.0.0.0 --port 8000"
 

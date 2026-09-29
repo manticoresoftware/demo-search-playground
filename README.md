@@ -68,6 +68,8 @@ Set in `.env`:
 OPENROUTER_API_KEY=
 # Optional: host port for the app, which listens on 127.0.0.1 only. Defaults to 8000.
 APP_PORT=
+# Optional: PostHog project key. Unset, the page loads no analytics.
+POSTHOG_KEY=
 ```
 
 The key is passed into the `manticore` service and used when the app creates Manticore chat models on demand. Only Ask AI needs it.

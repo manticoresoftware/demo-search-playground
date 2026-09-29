@@ -22,16 +22,19 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" />
     <link rel="stylesheet" href="/static/styles.css?v=20260917c" />
-    <script>
-      !function(l,a){var h,g,f,m;a.__SV||(window.posthog=a,a._i=[],a.init=function(p,n,d){function q(e,b){var k=b.split(".");2==k.length&&(e=e[k[0]],b=k[1]);e[b]=function(){e.push([b].concat(Array.prototype.slice.call(arguments,0)))}}(f=l.createElement("script")).type="text/javascript";f.crossOrigin="anonymous";f.async=!0;f.src=n.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js";(m=l.getElementsByTagName("script")[0]).parentNode.insertBefore(f,m);var c=a;void 0!==d?c=a[d]=[]:d="posthog";c.people=c.people||[];c.toString=function(e){var b="posthog";return"posthog"!==d&&(b+="."+d),e||(b+=" (stub)"),b};c.people.toString=function(){return c.toString(1)+".people (stub)"};h="init Re Os As Pe Ms Fs capture Ve calculateEventProperties js register register_once register_for_session unregister unregister_for_session qs getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey canRenderSurveyAsync identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty zs Ls createPersonProfile Us Rs Bs opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing Ds debug I Ns getPageViewId captureTraceFeedback captureTraceMetric".split(" ");for(g=0;g<h.length;g++)q(c,h[g]);a._i.push([p,n,d])},a.__SV=1)}(document,window.posthog||[]);
-      // manticoresearch.com's project and settings (its GTM container), so a visitor from the site's demo stays one person here.
-      posthog.init("phc_pECEn2mSa3fIOrjk5FZOSQ76dFr71hG8TjmhpBvv0RW", {
-        api_host: "https://eu.i.posthog.com",
-        defaults: "2025-05-24",
-        person_profiles: "identified_only",
-        // manticoresearch.com/demos/ embeds the playground; app.js drops ?embed=1 from the URL, so events carry it instead.
-        before_send: new URLSearchParams(location.search).get("embed") === "1" ? (event) => ({ ...event, properties: { ...event.properties, embedded: true } }) : null,
-      });
+    <script data-posthog-key="">
+      // app.py fills in POSTHOG_KEY; copies of the playground that leave it unset load no analytics.
+      if (document.currentScript.dataset.posthogKey) {
+        !function(l,a){var h,g,f,m;a.__SV||(window.posthog=a,a._i=[],a.init=function(p,n,d){function q(e,b){var k=b.split(".");2==k.length&&(e=e[k[0]],b=k[1]);e[b]=function(){e.push([b].concat(Array.prototype.slice.call(arguments,0)))}}(f=l.createElement("script")).type="text/javascript";f.crossOrigin="anonymous";f.async=!0;f.src=n.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js";(m=l.getElementsByTagName("script")[0]).parentNode.insertBefore(f,m);var c=a;void 0!==d?c=a[d]=[]:d="posthog";c.people=c.people||[];c.toString=function(e){var b="posthog";return"posthog"!==d&&(b+="."+d),e||(b+=" (stub)"),b};c.people.toString=function(){return c.toString(1)+".people (stub)"};h="init Re Os As Pe Ms Fs capture Ve calculateEventProperties js register register_once register_for_session unregister unregister_for_session qs getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey canRenderSurveyAsync identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty zs Ls createPersonProfile Us Rs Bs opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing Ds debug I Ns getPageViewId captureTraceFeedback captureTraceMetric".split(" ");for(g=0;g<h.length;g++)q(c,h[g]);a._i.push([p,n,d])},a.__SV=1)}(document,window.posthog||[]);
+        // The same settings as manticoresearch.com's GTM container, so a visitor from the site's demo stays one person here.
+        posthog.init(document.currentScript.dataset.posthogKey, {
+          api_host: "https://eu.i.posthog.com",
+          defaults: "2025-05-24",
+          person_profiles: "identified_only",
+          // manticoresearch.com/demos/ embeds the playground; app.js drops ?embed=1 from the URL, so events carry it instead.
+          before_send: new URLSearchParams(location.search).get("embed") === "1" ? (event) => ({ ...event, properties: { ...event.properties, embedded: true } }) : null,
+        });
+      }
     </script>
   </head>
   <body>

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
+import os
 import re
 import threading
 import time
@@ -15,7 +17,7 @@ from typing import Any, Literal, Optional
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -90,6 +92,8 @@ MAX_QUERY_LENGTH = 200
 MAX_RESULTS = 100
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 EMBED_UNAVAILABLE = "The image embedding service is not running. Start it with: docker compose up -d embed"
+# The public playground sets manticoresearch.com's PostHog project key; left unset, the page loads no analytics.
+POSTHOG_KEY = os.environ.get("POSTHOG_KEY", "")
 # Manticore mixes up the vectors of two concurrent KNN-by-id queries on tables with different dimensions
 # ("requires a vector of 512 entries; 384 entries specified"), so the two similar lookups never overlap.
 SIMILAR_KNN_LOCK = threading.Lock()
@@ -215,8 +219,9 @@ def search_by_vector(query: str, vector: list[float], embed_ms: int, category: s
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(BASE_DIR / "static" / "index.html")
+def index() -> HTMLResponse:
+    page = (BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(page.replace('data-posthog-key=""', f'data-posthog-key="{html.escape(POSTHOG_KEY)}"'))
 
 
 @app.get("/api/search")

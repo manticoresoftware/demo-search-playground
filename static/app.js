@@ -184,7 +184,7 @@ async function api(path, options = {}, signal = undefined) {
   return body;
 }
 
-// index.html loads PostHog with manticoresearch.com's project, so a visitor from the site's demo stays one person here.
+// index.html loads PostHog only when app.py has a POSTHOG_KEY; without one there is no window.posthog and nothing is sent.
 function track(event, properties) {
   window.posthog?.capture(event, { mode: state.mode, ...properties });
 }
