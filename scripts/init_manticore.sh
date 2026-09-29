@@ -9,6 +9,8 @@ IMAGE_DUMP="${IMAGE_DUMP:-dumps/convapparel_image_vectors.sql.xz.part-*}"
 TABLE_DUMP_MEMBER="${TABLE_DUMP_MEMBER:-}"
 SERVICE_NAME="${MANTICORE_SERVICE:-manticore}"
 TABLE_NAME="${TABLE_NAME:-convapparel_products}"
+# Another auto-embedding model, e.g. Qwen/Qwen3-Embedding-0.6B: the dumped vectors are dropped and Manticore embeds every row on insert.
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-}"
 
 shopt -s nullglob
 table_dump_parts=($TABLE_DUMP)
@@ -56,8 +58,20 @@ patch_schema() {
     -e '}'
 }
 
+# The dump's vectors come from the default model, so a row ends with "),lat,lon)" and the vector list before it goes.
+swap_embedding_model() {
+  if [[ -z "$EMBEDDING_MODEL" ]]; then
+    cat
+    return
+  fi
+  sed -E \
+    -e "s#model_name='[^']*'#model_name='$EMBEDDING_MODEL'#" \
+    -e 's/`embedding_vector`, //' \
+    -e 's/^(\(.*),\([-0-9.,]+\),(-?[0-9.]+),(-?[0-9.]+)\)([,;])[ \t]*$/\1,\2,\3)\4/'
+}
+
 echo "Restoring $TABLE_DUMP..."
-dump_sql | patch_schema | docker exec -i "$container_id" sh -c 'exec mysql'
+dump_sql | patch_schema | swap_embedding_model | docker exec -i "$container_id" sh -c 'exec mysql'
 
 echo "Filling categories..."
 docker exec -i "$container_id" sh -c 'exec mysql -N -B --skip-table' <<< "SELECT category FROM $TABLE_NAME GROUP BY category" |
