@@ -184,6 +184,11 @@ async function api(path, options = {}, signal = undefined) {
   return body;
 }
 
+// index.html loads PostHog with manticoresearch.com's project, so a visitor from the site's demo stays one person here.
+function track(event, properties) {
+  window.posthog?.capture(event, { mode: state.mode, ...properties });
+}
+
 function categoryParam() {
   return [...state.categories].join(",");
 }
@@ -283,7 +288,7 @@ function updateCounts(result) {
   });
 }
 
-async function submit() {
+async function submit(trigger) {
   const query = els.query.value.trim();
   const byPhoto = state.mode === "image" && state.photo;
   if (!query && !byPhoto && state.mode !== "geo") return;
@@ -291,13 +296,18 @@ async function submit() {
   const controller = (searchController = new AbortController());
   syncUrl(byPhoto ? "" : query);
   setBusy(true);
+  // Geo ignores the query box, which still holds the last search's words.
+  const search = { mode: state.mode, trigger, query: state.mode === "geo" ? null : query, by_photo: Boolean(byPhoto), categories: [...state.categories], fuzzy: state.fuzzy };
   try {
-    if (state.mode === "chat") await runChat(query, controller.signal);
-    else if (state.mode === "compare") await runCompare(query, controller.signal);
-    else if (state.mode === "geo") await runGeo(controller.signal);
-    else await runSearch(query, controller.signal);
+    let outcome;
+    if (state.mode === "chat") outcome = await runChat(query, controller.signal);
+    else if (state.mode === "compare") outcome = await runCompare(query, controller.signal);
+    else if (state.mode === "geo") outcome = await runGeo(controller.signal);
+    else outcome = await runSearch(query, controller.signal);
+    track("playground_search", { ...search, ...outcome });
   } catch (error) {
     if (error.name === "AbortError") return;
+    track("playground_search_failed", { ...search, error: error.message });
     els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
     // Results from the previous search would read as answers to this one.
     // Results from the previous search would read as answers to this one; the geo map stays.
@@ -325,6 +335,7 @@ async function runSearch(query, signal) {
   els.output.innerHTML = result.hits.length
     ? `<div class="grid">${result.hits.map((hit, index) => productCard(hit, index + 1, result.terms, result.mode)).join("")}</div>`
     : `<p class="empty">No products match. Try fewer words${result.mode === "fulltext" && !result.fuzzy ? " or turn on typo tolerance" : ""}.</p>`;
+  return { results: result.hits.length, total: result.total, took_ms: result.took_ms, corrected: result.corrected };
 }
 
 function loadLeaflet() {
@@ -385,7 +396,7 @@ async function ensureGeoMap() {
 function setGeoLocation(latlng) {
   state.geo.lat = latlng.lat;
   state.geo.lon = latlng.lng;
-  submit();
+  submit("geo_pin");
 }
 
 function geoItem(hit) {
@@ -445,6 +456,7 @@ async function runGeo(signal) {
   }
   const total = result.total ?? result.hits.length;
   els.status.innerHTML = `<span>${total.toLocaleString("en")} ${total === 1 ? "product" : "products"} within ${state.geo.radius} km in ${result.took_ms} ms</span>`;
+  return { results: result.hits.length, total, took_ms: result.took_ms, radius_km: state.geo.radius };
 }
 
 async function runCompare(query, signal) {
@@ -459,6 +471,7 @@ async function runCompare(query, signal) {
   updateCounts(results[0]);
   els.status.innerHTML = "<span>The same query in three search types. Products found by more than one are marked.</span>";
   els.output.innerHTML = `<div class="compare">${results.map((result) => compareColumn(result, foundBy)).join("")}</div>`;
+  return { results: foundBy.size };
 }
 
 function compareColumn(result, foundBy) {
@@ -555,6 +568,7 @@ async function runChat(message, signal) {
   els.query.value = "";
   els.query.placeholder = "Ask a follow-up question";
   els.output.querySelector(".turn:last-of-type").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  return { results: result.sources.length, search_query: result.search_query, turn: state.turns.length };
 }
 
 // Every homepage visitor sees the same answer, so it continues as a copy of its own.
@@ -582,8 +596,11 @@ async function continueConversation(conversation, sources, followUp) {
     els.query.placeholder = "Ask a follow-up question";
     if (followUp) await runChat(followUp, controller.signal);
     else els.query.focus({ preventScroll: true });
+    track("playground_conversation_continued", { question: followUp, turns: state.turns.length });
   } catch (error) {
-    if (error.name !== "AbortError") els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (error.name === "AbortError") return;
+    track("playground_conversation_continue_failed", { question: followUp, error: error.message });
+    els.status.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
   } finally {
     if (controller === searchController) setBusy(false);
   }
@@ -591,6 +608,7 @@ async function continueConversation(conversation, sources, followUp) {
 
 async function openProduct(id) {
   const hit = products.get(id);
+  track("playground_product_opened", { product_id: id, title: hit.title, from_similar: els.dialog.open });
   els.productImage.src = thumbnail(hit.image_url, 640);
   els.productImage.alt = hit.title;
   els.productCategory.textContent = hit.category;
@@ -634,8 +652,8 @@ function setPhoto(file) {
   state.photo = file;
   els.photoImage.src = URL.createObjectURL(file);
   els.photoPreview.hidden = false;
-  if (state.mode === "image") submit();
-  else setMode("image");
+  if (state.mode === "image") submit("photo");
+  else setMode("image", "photo");
   els.query.value = "";
   els.query.placeholder = "Type to search by words instead";
 }
@@ -699,7 +717,7 @@ function renderExamples() {
   els.examples.innerHTML = `<span>Try</span>${buttons.join("")}`;
 }
 
-function setMode(mode) {
+function setMode(mode, trigger) {
   // Search types share a query so their results can be compared; a question for the AI and a map pin read differently.
   const queryless = (kind) => kind === "chat" || kind === "geo";
   const switchesKind = queryless(mode) !== queryless(state.mode);
@@ -723,7 +741,7 @@ function setMode(mode) {
   const example = MODES[mode].examples[0];
   if (example && (switchesKind || !els.query.value.trim())) els.query.value = example;
   if (mode === "chat") showChat();
-  else submit();
+  else submit(trigger);
 }
 
 els.form.addEventListener("submit", (event) => {
@@ -731,12 +749,13 @@ els.form.addEventListener("submit", (event) => {
   // A live search still waiting to fire would repeat this one.
   clearTimeout(liveTimer);
   closeSuggestions();
-  submit();
+  // Suggestions submit with the reason in detail; a real submit has none.
+  submit(event.detail || "submit");
 });
 
 els.tabs.forEach((tab, index) => {
   tab.addEventListener("click", () => {
-    if (tab.dataset.tab !== state.mode) setMode(tab.dataset.tab);
+    if (tab.dataset.tab !== state.mode) setMode(tab.dataset.tab, "tab");
   });
   tab.addEventListener("keydown", (event) => {
     const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
@@ -744,20 +763,20 @@ els.tabs.forEach((tab, index) => {
     event.preventDefault();
     const next = els.tabs[(index + step + els.tabs.length) % els.tabs.length];
     next.focus();
-    setMode(next.dataset.tab);
+    setMode(next.dataset.tab, "tab");
   });
 });
 
 els.fuzzy.addEventListener("change", () => {
   state.fuzzy = els.fuzzy.checked;
-  submit();
+  submit("fuzzy");
 });
 
 els.categories.addEventListener("change", (event) => {
   const input = event.target;
   if (input.checked) state.categories.add(input.value);
   else state.categories.delete(input.value);
-  submit();
+  submit("category");
 });
 
 els.geoRadius.addEventListener("input", () => {
@@ -768,7 +787,7 @@ els.geoRadius.addEventListener("input", () => {
 });
 
 els.geoRadius.addEventListener("change", () => {
-  if (state.mode === "geo") submit();
+  if (state.mode === "geo") submit("geo_radius");
 });
 
 els.geoReset.addEventListener("click", () => {
@@ -777,14 +796,14 @@ els.geoReset.addEventListener("click", () => {
   state.geo.radius = DEFAULT_RADIUS_KM;
   els.geoRadius.value = DEFAULT_RADIUS_KM;
   els.geoRadiusValue.textContent = `${DEFAULT_RADIUS_KM} km`;
-  submit();
+  submit("geo_reset");
 });
 
 els.examples.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
   els.query.value = "example" in button.dataset ? button.dataset.example : await randomQuestion();
-  submit();
+  submit("example");
 });
 
 els.photoInput.addEventListener("change", () => {
@@ -794,7 +813,7 @@ els.photoInput.addEventListener("change", () => {
 els.photoClear.addEventListener("click", () => {
   clearPhoto();
   els.query.value = MODES.image.examples[0];
-  submit();
+  submit("photo_clear");
 });
 
 window.addEventListener("dragover", (event) => {
@@ -834,7 +853,7 @@ els.query.addEventListener("input", () => {
   }
   // Chat answers cost seconds and a photo search ignores the words, so only typed searches run live.
   if (els.live.checked && !els.live.disabled) {
-    liveTimer = setTimeout(submit, LIVE_SEARCH_DELAY_MS);
+    liveTimer = setTimeout(() => submit("live"), LIVE_SEARCH_DELAY_MS);
     // Results already follow every keystroke; a suggestion list would only cover them.
     return;
   }
@@ -864,7 +883,7 @@ els.query.addEventListener("keydown", (event) => {
   } else if (event.key === "Enter" && active >= 0) {
     event.preventDefault();
     els.query.value = options[active].textContent;
-    els.form.requestSubmit();
+    els.form.dispatchEvent(new CustomEvent("submit", { cancelable: true, detail: "suggestion" }));
   } else if (event.key === "Escape") {
     // Escape in a search box would also wipe the query.
     event.preventDefault();
@@ -880,7 +899,7 @@ els.suggestions.addEventListener("mousedown", (event) => {
   const option = event.target.closest('[role="option"]');
   if (!option) return;
   els.query.value = option.textContent;
-  els.form.requestSubmit();
+  els.form.dispatchEvent(new CustomEvent("submit", { cancelable: true, detail: "suggestion" }));
 });
 
 els.output.addEventListener("mouseover", (event) => {
@@ -902,6 +921,7 @@ document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-copy]");
   if (copy) {
     navigator.clipboard.writeText($(copy.dataset.copy).dataset.raw);
+    track("playground_copy", { target: copy.dataset.copy });
     copy.textContent = "Copied";
     setTimeout(() => {
       copy.textContent = "Copy";
@@ -929,6 +949,6 @@ state.categories.forEach((value) => {
   if (input) input.checked = true;
 });
 els.query.value = params.get("q") || MODES[state.mode].examples[0] || "";
-setMode(state.mode);
+setMode(state.mode, "load");
 // manticoresearch.com's Ask AI demo lands here with the conversation it showed and, from its follow-up box, the next question.
 if (state.mode === "chat" && params.get("conversation")) continueConversation(params.get("conversation"), params.get("sources"), (params.get("q") || "").trim());
