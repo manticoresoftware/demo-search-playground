@@ -82,7 +82,7 @@ Every search endpoint returns the SQL it ran (`sql`) and the same query as bodie
   - Response: `sql`, `requests`, `took_ms` and `hits`. Full-text and geo also return `total`; full-text adds `facets`. When typo tolerance changed a word, `corrected` holds the query found with `CALL QSUGGEST`, and `terms` holds the words to highlight. Image search adds `embed_ms`, the time spent turning the query into a vector; geo hits add `lat`, `lon` and `distance_km`.
 - `GET /api/geo/points?lat=&lon=&radius=&limit=` returns only the coordinates of products within `radius` km (up to 100) as `points` (`[[lat, lon], …]`, up to 1,000, sampled in id order), for drawing products as map dots.
 - `POST /api/search/image` searches by photo. Send the photo (up to 5 MB) as the request body with an `image/*` `Content-Type`; `category` and `limit` work as above.
-- `GET /api/autocomplete?q=` completes the last word with `CALL AUTOCOMPLETE`.
+- `GET /api/autocomplete?q=` sends the whole query to `CALL AUTOCOMPLETE`, which keeps the typed words and completes the last one.
 - `GET /api/similar/{id}` returns the products closest to a product, using KNN by document id. Add `?by=photo` to compare product photos instead of descriptions.
 - `POST /api/assistant/chat`
   - Body: `message`, optional `conversation_uuid`, optional `custom_prompt`

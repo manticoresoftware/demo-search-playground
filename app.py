@@ -46,7 +46,7 @@ from search import (
     build_similar_sql,
     build_suggest_sql,
     category_counts,
-    complete_query,
+    completions,
     json_list,
     json_text,
     query_words,
@@ -336,12 +336,12 @@ async def search_photo(
 
 @app.get("/api/autocomplete")
 def autocomplete(q: str = Query(min_length=1, max_length=MAX_QUERY_LENGTH)) -> dict[str, Any]:
-    last_word = re.search(r"\w{2,}$", q)
-    if not last_word:
+    # Nothing to complete after a space or a one-letter word: min_infix_len is 2.
+    if not re.search(r"\w{2,}$", q):
         return {"sql": None, "suggestions": []}
-    sql = build_autocomplete_sql(last_word.group().lower(), sql_quote)
+    sql = build_autocomplete_sql(q, sql_quote)
     rows = run_sql(sql)[0]["data"]
-    return {"sql": sql, "suggestions": complete_query(q, [row["query"] for row in rows])}
+    return {"sql": sql, "suggestions": completions(q, [row["query"] for row in rows])}
 
 
 class CopyConversationRequest(BaseModel):

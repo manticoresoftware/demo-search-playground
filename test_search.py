@@ -3,6 +3,7 @@
 from app import sql_quote
 from conversational_search import history_turns
 from search import (
+    AUTOCOMPLETE_LIMIT,
     build_count_sql,
     build_geo_json,
     build_geo_points_sql,
@@ -13,7 +14,7 @@ from search import (
     build_search_json,
     build_search_sql,
     category_counts,
-    complete_query,
+    completions,
     json_list,
     json_text,
     sql_list,
@@ -74,8 +75,8 @@ assert "knn(image_vector, 100, (0.1, 0.2))" in build_image_knn_sql("(0.1, 0.2)")
 sql = build_products_sql("(1, 2)", ["tops"], sql_quote)
 assert "WHERE id IN (1, 2) AND categories IN ('tops') LIMIT 100" in sql, sql
 
-assert complete_query("waterproof hik", ["hiking", "dashiki", "hik"]) == ["waterproof hiking"]
-assert complete_query("boots ", ["boots"]) == []
+assert completions("Linen shirt", ["linen shirt", "linen shirts"]) == ["linen shirts"]
+assert len(completions("linen sh", [f"linen sh{n}" for n in range(10)])) == AUTOCOMPLETE_LIMIT
 
 sql = build_geo_sql(40.7128, -74.006, 10, ["footwear"], 12, sql_quote)
 assert sql == (
