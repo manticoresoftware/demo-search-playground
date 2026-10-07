@@ -159,10 +159,10 @@ def build_suggest_sql(word: str, quote: Quote) -> str:
     return f"CALL QSUGGEST({quote(word)}, '{TABLE}', 1 AS limit, 2 AS max_edits)"
 
 
-def build_autocomplete_sql(word: str, quote: Quote) -> str:
+def build_autocomplete_sql(query: str, quote: Quote) -> str:
     # By default the last word also expands as an infix, and matches like "print" for "int" crowd
     # real completions out of the ten rows AUTOCOMPLETE returns.
-    return f"CALL AUTOCOMPLETE({quote(word)}, '{TABLE}', 0 AS fuzziness, 1 AS append, 0 AS prepend)"
+    return f"CALL AUTOCOMPLETE({quote(query)}, '{TABLE}', 0 AS fuzziness, 1 AS append, 0 AS prepend)"
 
 
 def build_similar_sql(product_id: int) -> str:
@@ -266,11 +266,7 @@ def category_counts(facet_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"value": row["categories"], "count": row["count(*)"]} for row in facet_rows]
 
 
-def complete_query(query: str, suggestions: list[str]) -> list[str]:
-    last_word = re.search(r"\w+$", query)
-    if not last_word:
-        return []
-    prefix, typed = query[: last_word.start()], last_word.group().lower()
-    # Infix matches like "dashiki" for "hik" read as noise in a search box.
-    completions = [word for word in suggestions if word.startswith(typed) and word != typed]
-    return [prefix + word for word in completions[:AUTOCOMPLETE_LIMIT]]
+def completions(query: str, suggestions: list[str]) -> list[str]:
+    typed = query.strip().lower()
+    # AUTOCOMPLETE also returns the query itself once its last word is a whole word.
+    return [suggestion for suggestion in suggestions if suggestion != typed][:AUTOCOMPLETE_LIMIT]
