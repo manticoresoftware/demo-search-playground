@@ -37,7 +37,7 @@ const MODES = {
   },
   hybrid: {
     label: "Hybrid",
-    examples: ["comfy shoes for standing all day", "warm waterprof jacket", "summer dress for a beach wedding"],
+    examples: ["bicycle shoes", "warm waterprof jacket", "summer dress for a beach wedding"],
     explain:
       "Runs the full-text and vector searches in parallel and merges both rankings with Reciprocal Rank Fusion (OPTION fusion_method='rrf'). Each product shows which search found it.",
   },
@@ -55,7 +55,7 @@ const MODES = {
   },
   compare: {
     label: "Compare",
-    examples: ["comfy shoes for standing all day", "lether jaket", "outfit for a job interview"],
+    examples: ["bicycle shoes", "lether jaket", "outfit for a job interview"],
     explain:
       "Sends the same query to full-text, vector and hybrid search. Products found by more than one of them are marked, and pointing at a product highlights it in every list.",
   },
