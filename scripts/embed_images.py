@@ -25,6 +25,7 @@ EMBED_HTTP = "http://embed:8000"
 TABLE = "convapparel_products"
 # A separate table: Manticore can't UPDATE a KNN-indexed vector, and Buddy's partial REPLACE fails on some ids.
 IMAGE_TABLE = "convapparel_product_images"
+
 IMAGE_TABLE_SCHEMA = f"CREATE TABLE {IMAGE_TABLE} (image_vector float_vector knn_type='hnsw' knn_dims='512' hnsw_similarity='COSINE')"
 INSERT_BATCH_SIZE = 200
 PAGE_SIZE = 1000
