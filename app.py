@@ -5,7 +5,6 @@ import html
 import json
 import os
 import re
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -94,9 +93,6 @@ MAX_PHOTO_BYTES = 5 * 1024 * 1024
 EMBED_UNAVAILABLE = "The image embedding service is not running. Start it with: docker compose up -d embed"
 # The public playground sets manticoresearch.com's PostHog project key; left unset, the page loads no analytics.
 POSTHOG_KEY = os.environ.get("POSTHOG_KEY", "")
-# Manticore mixes up the vectors of two concurrent KNN-by-id queries on tables with different dimensions
-# ("requires a vector of 512 entries; 384 entries specified"), so the two similar lookups never overlap.
-SIMILAR_KNN_LOCK = threading.Lock()
 
 app = FastAPI(title="Manticore Search Playground", version="0.2.0")
 # manticoresearch.com, its Cloudflare Pages previews and its local Hugo server call the APIs directly from the browser.
@@ -404,8 +400,7 @@ def copy_conversation(
 def similar(product_id: int = PathParam(ge=1), by: Literal["description", "photo"] = "description") -> dict[str, Any]:
     if by == "photo":
         knn_sql = build_similar_photo_sql(product_id)
-        with SIMILAR_KNN_LOCK:
-            (neighbors,), knn_ms = timed_sql(knn_sql)
+        (neighbors,), knn_ms = timed_sql(knn_sql)
         distances = {row["id"]: row["distance"] for row in neighbors["data"]}
         hits, products_sql, products_json, products_ms = ranked_products(distances, None, SIMILAR_LIMIT)
         return {
@@ -416,8 +411,7 @@ def similar(product_id: int = PathParam(ge=1), by: Literal["description", "photo
         }
 
     sql = build_similar_sql(product_id)
-    with SIMILAR_KNN_LOCK:
-        (hits,), took_ms = timed_sql(sql)
+    (hits,), took_ms = timed_sql(sql)
     return {"sql": sql, "requests": [json_text(build_similar_json(product_id))], "took_ms": took_ms, "hits": [to_hit(row) for row in hits["data"]]}
 
 
